@@ -1,6 +1,5 @@
 import { MongoClient, type Db } from "mongodb";
 import type { SessionDoc, UserDoc } from "@/lib/models";
-import type { PendingConfirmation } from "@/lib/agent/confirmations";
 
 // Cache the connection on globalThis so dev-server reloads and serverless
 // invocations reuse one client instead of opening a new pool every time.
@@ -22,7 +21,6 @@ export function getDb(): Promise<Db> {
         db.collection<UserDoc>("users").createIndex({ email: 1 }),
         db.collection<SessionDoc>("sessions").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
         db.collection<SessionDoc>("sessions").createIndex({ userId: 1 }),
-        db.collection<PendingConfirmation>("pending_confirmations").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
       ]).catch((error) => {
         console.error("Creating MongoDB indexes failed:", error instanceof Error ? error.message : error);
       });

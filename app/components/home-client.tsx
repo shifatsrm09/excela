@@ -11,15 +11,9 @@ import PendingLink from "./pending-link";
 import { SIGN_IN_CHANNEL, startGoogleSignIn } from "./google-sign-in";
 import type { Session } from "@/lib/session-payload";
 import { IMAGE_TYPES, MAX_IMAGE_BYTES, type ImageInput } from "@/lib/image-input";
-import type { AgentMessage } from "@/lib/agent/agent";
 
-type Pipeline = "academic" | "general" | "smart";
 
-type SmartChatMessage = {
-  id: number;
-  role: "user" | "assistant";
-  content: string;
-};
+type Pipeline = "academic" | "general";
 
 type ViewLink = { sheet: string; url: string; base: string; gid: number; row: number };
 
@@ -107,89 +101,6 @@ export default function HomeClient({ initialSession }: { initialSession: Session
   const [menuOpen, setMenuOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-
-  // Smart Chat state (browser-session lifetime; resets on browser refresh)
-  const [smartChat, setSmartChat] = useState<SmartChatMessage[]>([]);
-  const [smartHistory, setSmartHistory] = useState<AgentMessage[]>([]);
-  const [smartInput, setSmartInput] = useState("");
-  const [smartLoading, setSmartLoading] = useState(false);
-  const [smartError, setSmartError] = useState("");
-  const chatMessagesEndRef = useRef<HTMLDivElement>(null);
-  const chatScrollRef = useRef<HTMLDivElement>(null);
-  const smartInputRef = useRef<HTMLTextAreaElement>(null);
-  const smartMsgCounter = useRef(0);
-  const prevSmartLoading = useRef(false);
-
-  useEffect(() => {
-    if (pipeline === "smart") {
-      chatMessagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [smartChat, smartLoading, pipeline]);
-
-  useEffect(() => {
-    if (prevSmartLoading.current && !smartLoading && pipeline === "smart") {
-      smartInputRef.current?.focus();
-    }
-    prevSmartLoading.current = smartLoading;
-  }, [smartLoading, pipeline]);
-
-  useEffect(() => {
-    if (pipeline === "smart") {
-      smartInputRef.current?.focus();
-    }
-  }, [pipeline]);
-
-  async function handleSmartSend(textToSend?: string) {
-    const raw = typeof textToSend === "string" ? textToSend : smartInput;
-    const trimmed = raw.trim();
-    if (!trimmed || smartLoading || !session?.authenticated || !session.sheet || !session.hasApiKey || !session.googleAccess) return;
-
-    const userMsg: SmartChatMessage = {
-      id: ++smartMsgCounter.current,
-      role: "user",
-      content: trimmed,
-    };
-
-    setSmartChat((prev) => [...prev, userMsg]);
-    setSmartInput("");
-    setSmartLoading(true);
-    setSmartError("");
-
-    try {
-      const res = await fetch("/api/agent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: trimmed,
-          history: smartHistory,
-          today: localToday(),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        handleAuthCode(data.code);
-        throw new Error(data.error || "Unable to reach Excela.");
-      }
-
-      const assistantMsg: SmartChatMessage = {
-        id: ++smartMsgCounter.current,
-        role: "assistant",
-        content: typeof data.reply === "string" ? data.reply : "",
-      };
-
-      setSmartChat((prev) => [...prev, assistantMsg]);
-      if (Array.isArray(data.history)) {
-        setSmartHistory(data.history);
-      }
-    } catch (err) {
-      setSmartError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      setSmartLoading(false);
-      setTimeout(() => {
-        smartInputRef.current?.focus();
-      }, 0);
-    }
-  }
 
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -403,12 +314,6 @@ export default function HomeClient({ initialSession }: { initialSession: Session
 
     setError("");
     resetResults();
-
-    if (pipeline === "smart") {
-      void handleSmartSend(trimmedMessage);
-      setMessage("");
-      return;
-    }
 
     setLoading(true);
     addLog(`Reading your message with Ollama (${pipeline} pipeline)…`);
@@ -638,6 +543,7 @@ export default function HomeClient({ initialSession }: { initialSession: Session
       <aside id="dashboard-sidebar" aria-label="Sidebar" aria-hidden={!sidebarOpen} inert={!sidebarOpen} className={styles.sidebar}>
         <nav aria-label="Planner settings" className={styles.sidebarNav}>
           <PendingLink href="/setup" className={styles.sidebarAction}>Planner &amp; API settings ↗</PendingLink>
+          <PendingLink href="/discord" className={styles.sidebarAction}>Discord announcements ↗</PendingLink>
         </nav>
       </aside>
       {sidebarOpen && <button type="button" className={styles.backdrop} aria-label="Close sidebar" onClick={() => setSidebarOpen(false)} />}
@@ -656,219 +562,90 @@ export default function HomeClient({ initialSession }: { initialSession: Session
           )}
 
           <div className={styles.workspaceGate}>
-          <div
-            className={pipeline === "smart" ? `${styles.workspace} ${styles.smartWorkspace}` : styles.workspace}
-            data-locked={!setupComplete}
-            inert={!setupComplete}
-            aria-hidden={!setupComplete}
-          >
-            {pipeline === "smart" ? (
-              <section className={styles.smartPanel} aria-labelledby="smart-heading">
-                <div className={styles.tabBar}>
-                  <div className={styles.smartHeaderTitle}>
-                    <h2 id="smart-heading">Excela</h2>
-                    <span className={styles.smartBadge}>Planner Agent</span>
-                  </div>
-                  <div className={styles.segmented} role="group" aria-label="Input type">
-                    <button type="button" aria-pressed={false} data-active={false} disabled={loading || syncing || smartLoading} onClick={() => choosePipeline("general")}>General</button>
-                    <button type="button" aria-pressed={false} data-active={false} disabled={loading || syncing || smartLoading} onClick={() => choosePipeline("academic")}>Academic</button>
-                    <button type="button" aria-pressed={true} data-active={true} disabled={loading || syncing || smartLoading} onClick={() => choosePipeline("smart")}>Excela</button>
-                  </div>
+          <div className={styles.workspace} data-locked={!setupComplete} inert={!setupComplete} aria-hidden={!setupComplete}>
+            <section className={styles.panel} aria-labelledby="input-heading">
+              <div className={styles.tabBar}>
+                <h2 id="input-heading">Input</h2>
+                <div className={styles.segmented} role="group" aria-label="Input type">
+                  <button type="button" aria-pressed={pipeline === "general"} data-active={pipeline === "general"} disabled={loading || syncing} onClick={() => choosePipeline("general")}>General</button>
+                  <button type="button" aria-pressed={pipeline === "academic"} data-active={pipeline === "academic"} disabled={loading || syncing} onClick={() => choosePipeline("academic")}>Academic</button>
                 </div>
-
-                <div className={styles.chatScroll} ref={chatScrollRef}>
-                  {smartChat.length === 0 ? (
-                    <div className={styles.chatEmptyState}>
-                      <div className={styles.chatEmptyIcon}>
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                        </svg>
-                      </div>
-                      <h3>Talk to Excela</h3>
-                      <p>Ask about your schedule, add assignments, reschedule dates, or complete tasks conversationally.</p>
-                      <div className={styles.chatSuggestions}>
-                        <button type="button" onClick={() => void handleSmartSend("What do I have today?")}>
-                          What do I have today?
-                        </button>
-                        <button type="button" onClick={() => void handleSmartSend("What's on this week?")}>
-                          What&apos;s on this week?
-                        </button>
-                        <button type="button" onClick={() => void handleSmartSend("What upcoming deadlines do I have?")}>
-                          Upcoming deadlines
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className={styles.chatList}>
-                      {smartChat.map((msg) => (
-                        <div key={msg.id} className={msg.role === "user" ? styles.userMessageRow : styles.assistantMessageRow}>
-                          <div className={msg.role === "user" ? styles.userBubble : styles.assistantBubble}>
-                            <div className={styles.bubbleAuthor}>
-                              {msg.role === "user" ? "You" : "Excela"}
-                            </div>
-                            <div className={styles.bubbleText}>
-                              {msg.content}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                      {smartLoading && (
-                        <div className={styles.assistantMessageRow}>
-                          <div className={`${styles.assistantBubble} ${styles.thinkingBubble}`}>
-                            <div className={styles.bubbleAuthor}>Excela</div>
-                            <div className={styles.thinkingText}>
-                              <span className={styles.thinkingDot} />
-                              <span className={styles.thinkingDot} />
-                              <span className={styles.thinkingDot} />
-                              <span style={{ marginLeft: "8px" }}>Thinking…</span>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                      {smartError && (
-                        <div className={styles.chatError}>
-                          <span>{smartError}</span>
-                        </div>
-                      )}
-                      <div ref={chatMessagesEndRef} />
-                    </div>
-                  )}
+              </div>
+              <form onSubmit={handleSubmit} className={styles.form} onPaste={(event) => {
+                const files = Array.from(event.clipboardData.items).filter((item) => item.kind === "file" && item.type.startsWith("image/"));
+                if (!files.length) return;
+                event.preventDefault();
+                if (files.length > 1) { setError("Attach one image at a time."); return; }
+                const file = files[0].getAsFile();
+                if (file) void attachImage(file);
+              }}>
+                {attachment && <div className={styles.attachment}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={`data:${attachment.mimeType};base64,${attachment.data}`} alt="Attached announcement" />
+                  <span>{attachment.name}</span>
+                  <button type="button" disabled={loading || syncing || readingImage} onClick={() => { clearAttachment(); resetResults(); }} aria-label="Remove attached image">Remove ×</button>
+                </div>}
+                <textarea id="message" enterKeyHint="enter" aria-label={pipeline === "general" ? "Task" : "Announcement"} value={message} onChange={(event) => setMessage(event.target.value)}
+                  onKeyDown={(event) => {
+                    // Touch-first devices keep the keyboard's normal newline behavior.
+                    // Desktop Enter submits; Shift+Enter and IME composition stay native.
+                    const touchKeyboard = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+                    if (!touchKeyboard && event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
+                      event.preventDefault();
+                      event.currentTarget.form?.requestSubmit();
+                    }
+                  }} placeholder={attachment ? "Add context (optional)…" : pipeline === "general" ? "Type a plan, or paste a screenshot here…" : "Type an announcement, or paste a screenshot here…"} rows={7} required={!attachment} maxLength={20000} disabled={loading || syncing || !session.sheet} />
+                <div className={styles.formFooter}>
+                  <input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void attachImage(file); }} />
+                  <button type="button" className={styles.secondary} disabled={loading || syncing || readingImage || !setupComplete} onClick={() => imageInputRef.current?.click()}>{readingImage ? "Reading image…" : attachment ? "Replace image" : "Add image +"}</button>
+                  <button type="submit" className={styles.primary} disabled={loading || syncing || readingImage || !session.googleAccess || !setupComplete}>
+                    {loading ? "Injecting…" : syncing ? "Injecting…" : "Inject ↗"}
+                  </button>
                 </div>
+                <p className={styles.hint}>{session.sheet ? <><span className={styles.desktopKeyboardHint}>Press Enter to inject · Shift+Enter for a new line.</span><span className={styles.touchKeyboardHint}>Return adds a new line · Tap Inject when ready.</span></> : "Connect or generate a planner to get started."}</p>
+              </form>
+            </section>
 
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    void handleSmartSend();
-                  }}
-                  className={styles.chatForm}
-                >
-                  <div className={styles.chatInputWrapper}>
-                    <textarea
-                      ref={smartInputRef}
-                      value={smartInput}
-                      onChange={(e) => setSmartInput(e.target.value)}
-                      onKeyDown={(event) => {
-                        const touchKeyboard = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
-                        if (!touchKeyboard && event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
-                          event.preventDefault();
-                          event.currentTarget.form?.requestSubmit();
-                        }
-                      }}
-                      placeholder={session?.sheet ? "Message Excela, e.g. \u2018add CSE340 quiz tomorrow at 10 AM\u2019 or \u2018what do I have today\u2019\u2026" : "Connect a planner to start chatting…"}
-                      rows={1}
-                      disabled={smartLoading || !session?.sheet || !session?.googleAccess}
-                      maxLength={4000}
-                      className={styles.chatTextarea}
-                    />
-                    <button
-                      type="submit"
-                      className={styles.chatSendButton}
-                      disabled={smartLoading || !smartInput.trim() || !session?.sheet || !session?.googleAccess}
-                      aria-label="Send message"
-                    >
-                      {smartLoading ? "…" : "Send ↗"}
-                    </button>
+            <section className={styles.panel} aria-labelledby="output-heading" aria-live="polite" aria-busy={loading || syncing}>
+              <div className={styles.tabBar}>
+                <h2 id="output-heading">Output</h2>
+                <div className={styles.segmented} role="group" aria-label="Output view">
+                  <button type="button" aria-pressed={outputTab === "json"} data-active={outputTab === "json"} onClick={() => setOutputTab("json")}>JSON</button>
+                  <button type="button" aria-pressed={outputTab === "log"} data-active={outputTab === "log"} onClick={() => setOutputTab("log")}>LOG</button>
+                </div>
+              </div>
+              {outputTab === "log" ? (
+                logs.length ? (
+                  <ol className={styles.log} aria-label="Injection log">
+                    {logs.map((entry, index) => (
+                      <li key={index} data-tone={entry.tone}><time>{entry.time}</time><span>{entry.text}</span></li>
+                    ))}
+                  </ol>
+                ) : (
+                  <div className={styles.emptyState}>
+                    <p>No activity yet.</p>
+                    <span>Each step of an injection is listed here.</span>
                   </div>
-                  <p className={styles.chatHint}>
-                    {session?.sheet ? (
-                      <>
-                        <span className={styles.desktopKeyboardHint}>Press Enter to send · Shift+Enter for a new line.</span>
-                        <span className={styles.touchKeyboardHint}>Tap Send when ready.</span>
-                      </>
-                    ) : (
-                      "Connect or generate a planner to get started."
-                    )}
-                  </p>
-                </form>
-              </section>
-            ) : (
-              <>
-                <section className={styles.panel} aria-labelledby="input-heading">
-                  <div className={styles.tabBar}>
-                    <h2 id="input-heading">Input</h2>
-                    <div className={styles.segmented} role="group" aria-label="Input type">
-                      <button type="button" aria-pressed={pipeline === "general"} data-active={pipeline === "general"} disabled={loading || syncing} onClick={() => choosePipeline("general")}>General</button>
-                      <button type="button" aria-pressed={pipeline === "academic"} data-active={pipeline === "academic"} disabled={loading || syncing} onClick={() => choosePipeline("academic")}>Academic</button>
-                      <button type="button" aria-pressed={false} data-active={false} disabled={loading || syncing} onClick={() => choosePipeline("smart")}>Excela</button>
-                    </div>
-                  </div>
-                  <form onSubmit={handleSubmit} className={styles.form} onPaste={(event) => {
-                    const files = Array.from(event.clipboardData.items).filter((item) => item.kind === "file" && item.type.startsWith("image/"));
-                    if (!files.length) return;
-                    event.preventDefault();
-                    if (files.length > 1) { setError("Attach one image at a time."); return; }
-                    const file = files[0].getAsFile();
-                    if (file) void attachImage(file);
-                  }}>
-                    {attachment && <div className={styles.attachment}>
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={`data:${attachment.mimeType};base64,${attachment.data}`} alt="Attached announcement" />
-                      <span>{attachment.name}</span>
-                      <button type="button" disabled={loading || syncing || readingImage} onClick={() => { clearAttachment(); resetResults(); }} aria-label="Remove attached image">Remove ×</button>
-                    </div>}
-                    <textarea id="message" enterKeyHint="enter" aria-label={pipeline === "general" ? "Task" : "Announcement"} value={message} onChange={(event) => setMessage(event.target.value)}
-                      onKeyDown={(event) => {
-                        // Touch-first devices keep the keyboard's normal newline behavior.
-                        // Desktop Enter submits; Shift+Enter and IME composition stay native.
-                        const touchKeyboard = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
-                        if (!touchKeyboard && event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
-                          event.preventDefault();
-                          event.currentTarget.form?.requestSubmit();
-                        }
-                      }} placeholder={attachment ? "Add context (optional)…" : pipeline === "general" ? "Type a plan, or paste a screenshot here…" : "Type an announcement, or paste a screenshot here…"} rows={7} required={!attachment} maxLength={20000} disabled={loading || syncing || !session.sheet} />
-                    <div className={styles.formFooter}>
-                      <input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void attachImage(file); }} />
-                      <button type="button" className={styles.secondary} disabled={loading || syncing || readingImage || !setupComplete} onClick={() => imageInputRef.current?.click()}>{readingImage ? "Reading image…" : attachment ? "Replace image" : "Add image +"}</button>
-                      <button type="submit" className={styles.primary} disabled={loading || syncing || readingImage || !session.googleAccess || !setupComplete}>
-                        {loading ? "Injecting…" : syncing ? "Injecting…" : "Inject ↗"}
-                      </button>
-                    </div>
-                    <p className={styles.hint}>{session.sheet ? <><span className={styles.desktopKeyboardHint}>Press Enter to inject · Shift+Enter for a new line.</span><span className={styles.touchKeyboardHint}>Return adds a new line · Tap Inject when ready.</span></> : "Connect or generate a planner to get started."}</p>
-                  </form>
-                </section>
-
-                <section className={styles.panel} aria-labelledby="output-heading" aria-live="polite" aria-busy={loading || syncing}>
-                  <div className={styles.tabBar}>
-                    <h2 id="output-heading">Output</h2>
-                    <div className={styles.segmented} role="group" aria-label="Output view">
-                      <button type="button" aria-pressed={outputTab === "json"} data-active={outputTab === "json"} onClick={() => setOutputTab("json")}>JSON</button>
-                      <button type="button" aria-pressed={outputTab === "log"} data-active={outputTab === "log"} onClick={() => setOutputTab("log")}>LOG</button>
-                    </div>
-                  </div>
-                  {outputTab === "log" ? (
-                    logs.length ? (
-                      <ol className={styles.log} aria-label="Injection log">
-                        {logs.map((entry, index) => (
-                          <li key={index} data-tone={entry.tone}><time>{entry.time}</time><span>{entry.text}</span></li>
-                        ))}
-                      </ol>
-                    ) : (
-                      <div className={styles.emptyState}>
-                        <p>No activity yet.</p>
-                        <span>Each step of an injection is listed here.</span>
-                      </div>
-                    )
-                  ) : response ? (
-                    <pre className={styles.response}>{response}</pre>
-                  ) : (
-                    <div className={styles.emptyState}>
-                      <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="3" /><path d="M8 3v4m8-4v4M4 11h16m-11 5h6" /></svg>
-                      <p>Your next plan starts here.</p>
-                      <span>Paste an announcement to turn it into a planner entry.</span>
-                    </div>
-                  )}
-                  <div className={styles.outputFooter}>
-                    {viewLinks.map((link) => <a key={link.url}
-                                  onClick={(event) => {
-                                    event.currentTarget.href = centeredSheetUrl(link);
-                                  }} href={link.url} target="_blank" rel="noopener noreferrer" className={styles.secondary}>{viewLinks.length > 1 ? 'View changes in ' + link.sheet : "View changes"} ↗</a>)}
-                    {(events.length > 0 || completionDate) && !synced && !loading && !syncing && <button type="button" className={styles.primary} onClick={handleSync} disabled={!session.googleAccess}>Retry sync ↗</button>}
-                    {syncMessage && <p role="status" className={styles.outputStatus} data-tone={synced ? undefined : "info"}>{syncMessage}</p>}
-                  </div>
-                  <p role="status" className={`${styles.hint} ${styles.outputHint}`}>{syncing ? "Writing to your planner…" : loading ? "Reading your message…" : "Use LOG to follow each step of an injection."}</p>
-                </section>
-              </>
-            )}
+                )
+              ) : response ? (
+                <pre className={styles.response}>{response}</pre>
+              ) : (
+                <div className={styles.emptyState}>
+                  <svg width="38" height="38" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" aria-hidden="true"><rect x="4" y="5" width="16" height="16" rx="3" /><path d="M8 3v4m8-4v4M4 11h16m-11 5h6" /></svg>
+                  <p>Your next plan starts here.</p>
+                  <span>Paste an announcement to turn it into a planner entry.</span>
+                </div>
+              )}
+              <div className={styles.outputFooter}>
+                {viewLinks.map((link) => <a key={link.url}
+                              onClick={(event) => {
+                                event.currentTarget.href = centeredSheetUrl(link);
+                              }} href={link.url} target="_blank" rel="noopener noreferrer" className={styles.secondary}>{viewLinks.length > 1 ? 'View changes in ' + link.sheet : "View changes"} ↗</a>)}
+                {(events.length > 0 || completionDate) && !synced && !loading && !syncing && <button type="button" className={styles.primary} onClick={handleSync} disabled={!session.googleAccess}>Retry sync ↗</button>}
+                {syncMessage && <p role="status" className={styles.outputStatus} data-tone={synced ? undefined : "info"}>{syncMessage}</p>}
+              </div>
+              <p role="status" className={`${styles.hint} ${styles.outputHint}`}>{syncing ? "Writing to your planner…" : loading ? "Reading your message…" : "Use LOG to follow each step of an injection."}</p>
+            </section>
           </div>
           {!setupComplete && <div className={styles.setupOverlay}><div className={styles.setupPrompt}><h2>A little setup. Then you are ready.</h2><p>Connect your planner and your personal Ollama API key.</p><PendingLink href="/setup" className={styles.primary}>Complete setup ↗</PendingLink></div></div>}
           </div>

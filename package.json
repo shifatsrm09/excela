@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "npx tsx --test test/reminders.test.ts"
+    "test": "npx tsx --test test/reminders.test.ts test/broadcast.test.ts"
   },
   "dependencies": {
     "google-auth-library": "^10.9.1",

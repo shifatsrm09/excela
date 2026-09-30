@@ -7,7 +7,7 @@ export async function sendTelegramMessage(
   chatId: number,
   text: string,
   options?: { parseMode?: "Markdown" | "HTML" },
-): Promise<{ ok: boolean; description?: string }> {
+): Promise<{ ok: boolean; description?: string; retryAfter?: number }> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) {
     console.error("TELEGRAM_BOT_TOKEN is not configured.");
@@ -28,7 +28,8 @@ export async function sendTelegramMessage(
     });
 
     const data = await response.json();
-    return { ok: Boolean(data.ok), description: data.description };
+    const retryAfter = typeof data?.parameters?.retry_after === "number" ? data.parameters.retry_after : undefined;
+    return { ok: Boolean(data.ok), description: data.description, retryAfter };
   } catch (error) {
     console.error("Failed to send Telegram message:", error instanceof Error ? error.message : error);
     return { ok: false, description: error instanceof Error ? error.message : "Network error" };
@@ -102,7 +103,12 @@ export async function sendTelegramReply(
   let allOk = true;
 
   for (const chunk of chunks) {
-    const res = await sendTelegramMessage(chatId, chunk, options);
+    let res = await sendTelegramMessage(chatId, chunk, options);
+    if (!res.ok && res.retryAfter) {
+      const waitMs = Math.min(res.retryAfter * 1000, 10_000);
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      res = await sendTelegramMessage(chatId, chunk, options);
+    }
     if (!res.ok) allOk = false;
   }
 

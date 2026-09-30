@@ -26,6 +26,7 @@ import {
   setDailyNotification,
 } from "@/lib/telegram/auto-notify";
 import { handleReminderCommand } from "@/lib/telegram/reminders";
+import { handleBroadcastCommand } from "@/lib/telegram/broadcast";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -354,6 +355,12 @@ export async function POST(request: Request) {
         chatId,
         "👋 Your Telegram account has been disconnected from Excela.\n\nYou can reconnect anytime from the Excela web settings.",
       );
+      return Response.json({ ok: true });
+    }
+
+    // Command: /broadcast <message> (Admin-only)
+    if (text === "/broadcast" || text.startsWith("/broadcast ") || text.startsWith("/broadcast@")) {
+      await handleBroadcastCommand(sender.id, chatId, text);
       return Response.json({ ok: true });
     }
 

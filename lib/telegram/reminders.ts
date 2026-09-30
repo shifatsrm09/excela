@@ -11,6 +11,8 @@ import {
   zonedTimeToUtc,
 } from "@/lib/telegram/auto-notify";
 
+export { formatTime12h, parseTimeInput };
+
 export type ParseReminderResult =
   | {
       success: true;
@@ -31,17 +33,204 @@ export type ParseReminderResult =
 
 /**
  * Extracts a 24h normalized time string from a text segment, if any exists.
+ * Accurately detects: "7pm", "7:00pm", "19:00", "09:00", "6.45", "noon", "midnight".
+ * Ignores bare numbers like "2" in "Oct 2" or course numbers.
  */
 export function extractTimeFromText(text: string): string | null {
   if (!text) return null;
-  // Match standard time tokens e.g. "3pm", "3:00pm", "3.00pm", "15:00", "03:00 PM", "3 PM"
-  const regex = /\b(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)?)\b/gi;
+  const lower = text.toLowerCase();
+  if (/\bnoon\b/.test(lower)) return "12:00";
+  if (/\bmidnight\b/.test(lower)) return "00:00";
+
+  // Match:
+  // 1) 12-hour times with AM/PM (e.g. "7pm", "7:00pm", "7.00pm", "7 pm", "7:00 PM")
+  // 2) 24-hour times with colon or period (e.g. "19:00", "18:30", "09:00", "6.45")
+  const regex = /\b(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)|\d{1,2}[:.]\d{2})\b/gi;
   let match: RegExpExecArray | null;
   while ((match = regex.exec(text)) !== null) {
     const candidate = parseTimeInput(match[1]);
     if (candidate) return candidate;
   }
   return null;
+}
+
+/**
+ * Removes clock time phrases and prepositions ("at 7pm", "7:00 PM", "at noon") from an event title.
+ */
+export function stripTimeFromText(text: string): string {
+  if (!text) return "";
+  return text
+    .replace(/\s+(?:at|@)?\s*\b(\d{1,2}(?:[:.]\d{2})?\s*(?:am|pm|a\.m\.|p\.m\.)|\d{1,2}[:.]\d{2}|noon|midnight)\b/gi, "")
+    .replace(/\s+at\s*$/i, "")
+    .replace(/\s+on\s*$/i, "")
+    .trim();
+}
+
+export type SyncReminderInput = {
+  cell: string;
+  sheetId?: number;
+  rowIndex?: number;
+  date?: string;
+  rawTitle: string;
+  explicitTime?: string | null;
+};
+
+export type SyncReminderResult = {
+  reminderSet: boolean;
+  time24?: string;
+  timeFormatted?: string;
+  reminderTimeFormatted?: string;
+  scheduledFor?: Date;
+  titleWithTime: string;
+  cleanTitle: string;
+};
+
+/**
+ * Synchronizes task reminder state for an event:
+ * - If event has an explicit clock time: schedules or updates a 5-minute pre-event reminder.
+ * - If event has NO explicit clock time: disables/removes any existing task reminder for this cell.
+ */
+export async function syncReminderForEvent(
+  user: UserDoc,
+  input: SyncReminderInput,
+  now: Date = new Date(),
+): Promise<SyncReminderResult> {
+  const reminders = await taskRemindersCollection();
+
+  // 1. Determine if there is an explicit clock time
+  let time24: string | null = null;
+  if (input.explicitTime && typeof input.explicitTime === "string") {
+    time24 = parseTimeInput(input.explicitTime);
+  }
+  if (!time24) {
+    time24 = extractTimeFromText(input.rawTitle);
+  }
+
+  const cleanTitle = stripTimeFromText(input.rawTitle) || input.rawTitle.trim();
+
+  // If untimed: disable any existing reminder for this cell
+  if (!time24) {
+    try {
+      await reminders.updateMany(
+        { userId: user._id, cell: input.cell, enabled: true, sentAt: null },
+        {
+          $set: {
+            enabled: false,
+            discardedAt: now,
+            discardReason: "time_removed",
+            updatedAt: now,
+          },
+          $unset: { processingLockUntil: "" },
+        },
+      );
+    } catch {
+      // Best effort
+    }
+    return {
+      reminderSet: false,
+      titleWithTime: cleanTitle,
+      cleanTitle,
+    };
+  }
+
+  const timeFormatted = formatTime12h(time24);
+  const titleWithTime = `${cleanTitle} ${timeFormatted}`;
+
+  const userTimezone = user.dailyNotification?.timezone || DEFAULT_TIMEZONE || "Asia/Dhaka";
+
+  // Resolve event date
+  let eventDate = input.date;
+  if (!eventDate) {
+    const existing = await reminders.findOne({ userId: user._id, cell: input.cell });
+    if (existing?.date) {
+      eventDate = existing.date;
+    } else {
+      const zoned = getZonedParts(now, userTimezone);
+      eventDate = `${zoned.year}-${String(zoned.month).padStart(2, "0")}-${String(zoned.day).padStart(2, "0")}`;
+    }
+  }
+
+  const [targetYear, targetMonth, targetDay] = eventDate.split("-").map(Number);
+  const [targetHour, targetMinute] = time24.split(":").map(Number);
+  const eventUtc = zonedTimeToUtc(targetYear, targetMonth, targetDay, targetHour, targetMinute, userTimezone);
+  const scheduledFor = new Date(eventUtc.getTime() - 5 * 60_000); // 5 minutes before event
+
+  const reminderZoned = getZonedParts(scheduledFor, userTimezone);
+  const reminderTime24 = `${String(reminderZoned.hour).padStart(2, "0")}:${String(reminderZoned.minute).padStart(2, "0")}`;
+  const reminderTimeFormatted = formatTime12h(reminderTime24);
+
+  // If reminder is already in the past, do not schedule or enable it
+  if (scheduledFor.getTime() <= now.getTime()) {
+    return {
+      reminderSet: false,
+      time24,
+      timeFormatted,
+      reminderTimeFormatted,
+      titleWithTime,
+      cleanTitle,
+    };
+  }
+
+  const telegramChatId = user.telegram?.chatId ?? 0;
+
+  const existing = await reminders.findOne({
+    userId: user._id,
+    cell: input.cell,
+    sentAt: null,
+  });
+
+  if (existing) {
+    await reminders.updateOne(
+      { _id: existing._id },
+      {
+        $set: {
+          telegramChatId: telegramChatId || existing.telegramChatId,
+          title: cleanTitle,
+          date: eventDate,
+          time: time24,
+          sheetLabel: titleWithTime.toUpperCase(),
+          sheetId: input.sheetId ?? existing.sheetId,
+          rowIndex: input.rowIndex ?? existing.rowIndex,
+          timezone: userTimezone,
+          scheduledFor,
+          enabled: true,
+          updatedAt: now,
+        },
+        $unset: { processingLockUntil: "", discardedAt: "", discardReason: "" },
+      },
+    );
+  } else {
+    const reminderDoc: TaskReminderDoc = {
+      _id: new ObjectId(),
+      userId: user._id,
+      telegramChatId,
+      title: cleanTitle,
+      date: eventDate,
+      time: time24,
+      sheetLabel: titleWithTime.toUpperCase(),
+      cell: input.cell,
+      sheetId: input.sheetId,
+      rowIndex: input.rowIndex,
+      timezone: userTimezone,
+      scheduledFor,
+      enabled: true,
+      sentAt: null,
+      processingLockUntil: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await reminders.insertOne(reminderDoc);
+  }
+
+  return {
+    reminderSet: true,
+    time24,
+    timeFormatted,
+    reminderTimeFormatted,
+    scheduledFor,
+    titleWithTime,
+    cleanTitle,
+  };
 }
 
 /**
@@ -432,8 +621,10 @@ export async function processDueReminders(
       }
 
       // Send reminder notification via Telegram
-      const message = `In 5 minutes you have ${reminder.title}.`;
-      await sendTelegramReply(reminder.telegramChatId, message);
+      if (reminder.telegramChatId) {
+        const message = `In 5 minutes you have ${reminder.title}.`;
+        await sendTelegramReply(reminder.telegramChatId, message);
+      }
 
       // Mark reminder sent
       await reminders.updateOne(

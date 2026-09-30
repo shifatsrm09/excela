@@ -4,6 +4,7 @@ import { ObjectId } from "mongodb";
 import {
   parseReminderCommand,
   extractTimeFromText,
+  stripTimeFromText,
 } from "@/lib/telegram/reminders";
 import {
   computeNextRunAt,
@@ -430,5 +431,79 @@ describe("Task Reminder (/n) Feature - Comprehensive Test Suite", () => {
     // Verify user dailyNotification is completely unchanged
     assert.deepStrictEqual(user.dailyNotification, initialConfig);
     assert.strictEqual(newReminder.title, "Meeting");
+  });
+
+  // 22. Natural language time edge cases
+  it("22. should correctly identify timed vs untimed natural language inputs", () => {
+    // Timed inputs
+    assert.strictEqual(extractTimeFromText("I have gym at 7pm Oct 2"), "19:00");
+    assert.strictEqual(extractTimeFromText("I have gym at 19:00 Oct 2"), "19:00");
+    assert.strictEqual(extractTimeFromText("I have gym tomorrow at 7pm"), "19:00");
+    assert.strictEqual(extractTimeFromText("I have gym at 7pm"), "19:00");
+    assert.strictEqual(extractTimeFromText("Gym at noon tomorrow"), "12:00");
+    assert.strictEqual(extractTimeFromText("Gym at midnight tomorrow"), "00:00");
+    assert.strictEqual(extractTimeFromText("Assignment due Oct 2 at 11pm"), "23:00");
+
+    // Untimed inputs (must NEVER extract a false time)
+    assert.strictEqual(extractTimeFromText("I have gym Oct 2"), null);
+    assert.strictEqual(extractTimeFromText("I have gym tomorrow"), null);
+    assert.strictEqual(extractTimeFromText("Assignment due tomorrow"), null);
+    assert.strictEqual(extractTimeFromText("CSE 220 assignment"), null);
+  });
+
+  // 23. stripTimeFromText
+  it("23. should strip time phrases cleanly from titles", () => {
+    assert.strictEqual(stripTimeFromText("Self Advising at 7pm"), "Self Advising");
+    assert.strictEqual(stripTimeFromText("Self Advising 7:00 PM"), "Self Advising");
+    assert.strictEqual(stripTimeFromText("Meeting tomorrow at 3pm"), "Meeting tomorrow");
+    assert.strictEqual(stripTimeFromText("Gym at noon"), "Gym");
+    assert.strictEqual(stripTimeFromText("Gym Oct 2"), "Gym Oct 2");
+  });
+
+  // 24. Timed event reminder calculation (5 minutes prior)
+  it("24. should compute exactly 5-minute pre-event reminder for natural language timed event", () => {
+    // Event: Oct 1, 7:00 PM (19:00) in Asia/Dhaka
+    const time24 = extractTimeFromText("I have self advising at 7pm Oct 1");
+    assert.strictEqual(time24, "19:00");
+
+    const eventUtc = zonedTimeToUtc(2026, 10, 1, 19, 0, "Asia/Dhaka");
+    const scheduledFor = new Date(eventUtc.getTime() - 5 * 60_000);
+
+    // 19:00 in Dhaka (UTC+6) is 13:00 UTC
+    assert.strictEqual(eventUtc.toISOString(), "2026-10-01T13:00:00.000Z");
+    // Reminder at 12:55 UTC (6:55 PM Dhaka)
+    assert.strictEqual(scheduledFor.toISOString(), "2026-10-01T12:55:00.000Z");
+    assert.strictEqual(eventUtc.getTime() - scheduledFor.getTime(), 300_000);
+  });
+
+  // 25. Untimed event produces NO reminder
+  it("25. should not schedule reminder for untimed event", () => {
+    const rawTitle = "Gym";
+    const explicitTime = "";
+    const extractedTime = parseTimeInput(explicitTime) || extractTimeFromText(rawTitle);
+
+    assert.strictEqual(extractedTime, null);
+    const reminderSet = Boolean(extractedTime);
+    assert.strictEqual(reminderSet, false);
+  });
+
+  // 26. Event time updates and removal
+  it("26. should update reminder when event time is updated, and disable reminder when time is removed", () => {
+    // Original event: 7:00 PM -> Reminder at 6:55 PM
+    let time24 = extractTimeFromText("Self Advising at 7pm");
+    assert.strictEqual(time24, "19:00");
+    const reminderMinutesBefore = 5;
+    assert.strictEqual(reminderMinutesBefore, 5);
+
+    // Update to 8:00 PM -> Reminder at 7:55 PM
+    const newTime = "8pm";
+    time24 = parseTimeInput(newTime);
+    assert.strictEqual(time24, "20:00");
+    assert.strictEqual(formatTime12h(time24), "8:00 PM");
+
+    // Remove time: newTime = ""
+    const removedTime = "";
+    time24 = parseTimeInput(removedTime);
+    assert.strictEqual(time24, null); // Untimed now!
   });
 });

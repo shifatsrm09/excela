@@ -40,18 +40,20 @@ You can chat with me naturally to manage your Google Sheets planner.
 • "What does my week look like?"
 • "Do I have any unfinished deadlines?"
 
-✏️ Managing events:
-• "Add CSE321 Quiz next Monday at 2 PM"
-• "Move my quiz to Friday"
-• "And make it 4 PM"
-• "Mark that quiz complete"
+✏️ Managing events & reminders:
+• "I have self advising at 7pm Oct 1" (automatically reminds you 5 mins before!)
+• "Gym tomorrow at 7pm"
+• "Meeting at 3pm"
+• "Gym on Oct 2" (untimed event)
+• "Move my meeting to Friday"
+• "Change the time to 4 PM"
+• "Mark that complete"
 
 💬 Commands:
 • /start [code] — Link your account or view status
 • /view — Open your connected Google Sheets planner
 • /week — View your 7-day schedule
 • /auto [time] — Configure daily schedule notification (e.g. /auto 6:30pm, /auto off)
-• /n [task] at [time] — Schedule a task with a 5-minute reminder (e.g. /n self advising at 3pm)
 • /clear — Reset conversation context
 • /disconnect — Disconnect Telegram from your Excela account
 • /help — Show this help message`;

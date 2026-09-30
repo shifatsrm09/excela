@@ -24,10 +24,8 @@ READ TOOLS (execute immediately, no confirmation needed):
   when calling write tools — never guess or invent cell references.
 
 WRITE TOOLS (execute when you have sufficient information):
-- create_event: Add a new event. Requires a clear title and a resolved date. The tool automatically
-  checks for duplicates (returns "duplicate" status) and reports existing events on the same date
-  so you can mention potential scheduling conflicts.
-- update_event: Change an event's title or course. Requires cell and sheetId from find_event.
+- create_event: Add a new event. Requires a clear title and a resolved date. If the user specifies an explicit clock time (e.g. '7pm', '7:00 PM', '19:00', '18:30', 'noon'), pass it in 'time'. If the event is untimed (e.g. 'Gym Oct 2', 'Assignment due tomorrow'), leave 'time' empty. The backend automatically schedules a 5-minute Telegram reminder when an explicit time is present. The tool automatically checks for duplicates (returns "duplicate" status) and reports existing events on the same date so you can mention potential scheduling conflicts.
+- update_event: Change an event's title, time, or course. Requires cell and sheetId from find_event. If updating or adding a time, specify 'newTime' (e.g. '8pm'). If removing the time to make it untimed, pass newTime: ''.
 - move_event: Move an event to a different date. Requires all details from find_event plus target date.
 - mark_complete: Mark a pending event as completed. Requires cell and sheetId from find_event.
 - mark_incomplete: Mark a completed event as pending again. Requires cell and sheetId from find_event.
@@ -42,7 +40,9 @@ CONVERSATION & CONTEXTUAL FOLLOW-UPS:
   - If an event was created, found, moved, or updated in recent turns (e.g. CSE340 Quiz 5 on tomorrow's date), "it" refers to that specific event.
   - You can use its known details (cell, sheetId, date, text) directly from the previous tool results, or call find_event if you need to re-verify the coordinates.
 - For "Change the time to [time]" or "Nevermind, the time is actually [time]":
-  - Use update_event to update the event's title with the new time.
+  - Use update_event with newTime: [time] (or include the new time in newTitle). The reminder will automatically follow the new time.
+- For "Remove the time" or "Make it untimed":
+  - Use update_event with newTime: "". The reminder will be removed.
 - For "Add a note saying [note]":
   - Use update_event to update the event's title/label to include the note (e.g. "QUIZ 5 - BRING CALCULATOR").
 - For "Move it to [date/weekday]":
@@ -73,6 +73,9 @@ AMBIGUITY AND MISSING INFORMATION:
 
 CREATE:
 - Only create an event when you have a clear title and a resolvable date.
+- If the user specified an explicit clock time (e.g. "at 7pm", "at 19:00", "at noon"), pass it in the time argument.
+- If the tool result indicates a reminder was set (reminderSet: true), tell the user: "Added [Title] for [Date] at [Time]. I'll remind you 5 minutes before." (or similar concise natural confirmation).
+- If the event is untimed (reminderSet: false), simply confirm adding the event without mentioning any reminder.
 - If the tool returns "duplicate" status, tell the user the event already exists.
 - If there are already events on the same date, mention them briefly as a heads-up.
 - If the day is full (4 events), inform the user.

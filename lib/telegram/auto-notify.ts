@@ -17,6 +17,9 @@ export const DEFAULT_TIMEZONE = process.env.APP_TIMEZONE || "Asia/Dhaka";
 export function parseTimeInput(raw: string): string | null {
   if (!raw || typeof raw !== "string") return null;
   const trimmed = raw.trim().toLowerCase();
+  if (trimmed === "noon") return "12:00";
+  if (trimmed === "midnight") return "00:00";
+
   const match = trimmed.match(/^(\d{1,2})(?:[:.](\d{1,2}))?\s*(am|pm|a\.m\.|p\.m\.)?$/i);
   if (!match) return null;
 
@@ -24,6 +27,11 @@ export function parseTimeInput(raw: string): string | null {
   const minutes = match[2] !== undefined ? parseInt(match[2], 10) : 0;
   const rawMeridiem = match[3]?.toLowerCase().replace(/\./g, "");
   const meridiem = rawMeridiem === "am" || rawMeridiem === "pm" ? rawMeridiem : undefined;
+
+  // Bare numbers without minutes or AM/PM (e.g. "2" in "Oct 2") are not valid times
+  if (!meridiem && match[2] === undefined) {
+    return null;
+  }
 
   if (Number.isNaN(hours) || Number.isNaN(minutes) || minutes < 0 || minutes > 59) {
     return null;

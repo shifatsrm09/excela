@@ -439,7 +439,7 @@ export default function TelegramClient({
             </div>
           </div>
 
-          {/* Card: /n */}
+          {/* Card: Smart Reminders */}
           <div className={styles.commandCard}>
             <div className={styles.commandCardTop}>
               <div className={styles.commandHeaderLeft}>
@@ -449,18 +449,18 @@ export default function TelegramClient({
                     <path d="M13.73 21a2 2 0 0 1-3.46 0" />
                   </svg>
                 </div>
-                <h3 className={styles.commandName}>/n &lt;task&gt; at &lt;time&gt;</h3>
+                <h3 className={styles.commandName}>Smart Reminders</h3>
               </div>
-              <span className={styles.commandBadge}>Task Reminder</span>
+              <span className={styles.commandBadge}>Automatic</span>
             </div>
             <p className={styles.commandDesc}>
-              Creates a planner event on your Google Sheet and schedules a Telegram reminder exactly 5 minutes before the event starts.
+              Any task added with an explicit time automatically gets a Telegram reminder 5 minutes before the event begins.
             </p>
             <div className={styles.commandExampleBox}>
               <span className={exampleLabel}>Examples:</span>
-              <span className={styles.exampleSnippet}>/n self advising at 3pm</span>
-              <span className={styles.exampleSnippet}>/n gym at 18:30</span>
-              <span className={styles.exampleSnippet}>/n cse321 quiz tomorrow at 10am</span>
+              <span className={styles.exampleSnippet}>&quot;I have self advising at 7pm Oct 1&quot;</span>
+              <span className={styles.exampleSnippet}>&quot;Gym tomorrow at 7pm&quot;</span>
+              <span className={styles.exampleSnippet}>&quot;Meeting tomorrow at 3pm&quot;</span>
             </div>
           </div>
 

@@ -85,7 +85,7 @@ export type TaskReminderDoc = {
   processingLockUntil?: Date | null;
   /** Discard metadata if cancelled, completed, or deleted before reminder fired */
   discardedAt?: Date | null;
-  discardReason?: "deleted" | "moved" | "time_changed" | "completed" | "cancelled";
+  discardReason?: "deleted" | "moved" | "time_changed" | "completed" | "cancelled" | "time_removed";
   createdAt: Date;
   updatedAt: Date;
 };

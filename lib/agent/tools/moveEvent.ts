@@ -1,6 +1,7 @@
 import type { UserDoc } from "@/lib/models";
 import { PlannerError, moveEvent } from "@/lib/planner-service";
 import { resolveRelativeDate } from "@/lib/agent/dates";
+import { syncReminderForEvent } from "@/lib/telegram/reminders";
 
 export const moveEventTool = {
   type: "function",
@@ -34,5 +35,28 @@ export async function runMoveEvent(user: UserDoc, today: string, args: Record<st
   if (!cell || !Number.isFinite(sourceSheetId) || !Number.isFinite(sourceRowIndex) || !sourceDate || !text || !targetDate) {
     throw new PlannerError("All fields are required. Use find_event first to get event details, then provide a valid target date.", "invalid_args");
   }
-  return moveEvent(user, { cell, sourceSheetId, sourceRowIndex, sourceDate, text, targetDate });
+  const result = await moveEvent(user, { cell, sourceSheetId, sourceRowIndex, sourceDate, text, targetDate });
+
+  let reminderSet = false;
+  let timeFormatted: string | undefined;
+  let reminderTimeFormatted: string | undefined;
+
+  if (result.to.cell) {
+    const syncRes = await syncReminderForEvent(user, {
+      cell: result.to.cell,
+      sheetId: result.to.sheetId,
+      date: targetDate,
+      rawTitle: text,
+    });
+    reminderSet = syncRes.reminderSet;
+    timeFormatted = syncRes.timeFormatted;
+    reminderTimeFormatted = syncRes.reminderTimeFormatted;
+  }
+
+  return {
+    ...result,
+    reminderSet,
+    time: timeFormatted,
+    reminderTime: reminderTimeFormatted,
+  };
 }

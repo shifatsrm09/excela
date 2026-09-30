@@ -1,6 +1,7 @@
 import { MongoClient, type Db } from "mongodb";
 import type {
   SessionDoc,
+  TaskReminderDoc,
   TelegramConversationDoc,
   TelegramLinkingTokenDoc,
   TelegramProcessedUpdateDoc,
@@ -34,6 +35,9 @@ export function getDb(): Promise<Db> {
         db.collection<TelegramLinkingTokenDoc>("telegram_linking_tokens").createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
         db.collection<TelegramConversationDoc>("telegram_conversations").createIndex({ updatedAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 }),
         db.collection<TelegramProcessedUpdateDoc>("telegram_processed_updates").createIndex({ createdAt: 1 }, { expireAfterSeconds: 3600 }),
+        db.collection<TaskReminderDoc>("task_reminders").createIndex({ enabled: 1, scheduledFor: 1, sentAt: 1 }, { sparse: true }),
+        db.collection<TaskReminderDoc>("task_reminders").createIndex({ userId: 1, date: 1, time: 1, title: 1 }),
+        db.collection<TaskReminderDoc>("task_reminders").createIndex({ userId: 1, enabled: 1 }),
       ]).catch((error) => {
         console.error("Creating MongoDB indexes failed:", error instanceof Error ? error.message : error);
       });
@@ -70,6 +74,10 @@ export async function telegramConversationsCollection() {
 
 export async function telegramProcessedUpdatesCollection() {
   return (await getDb()).collection<TelegramProcessedUpdateDoc>("telegram_processed_updates");
+}
+
+export async function taskRemindersCollection() {
+  return (await getDb()).collection<TaskReminderDoc>("task_reminders");
 }
 
 

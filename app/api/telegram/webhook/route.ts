@@ -25,6 +25,7 @@ import {
   parseTimeInput,
   setDailyNotification,
 } from "@/lib/telegram/auto-notify";
+import { handleReminderCommand } from "@/lib/telegram/reminders";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -50,6 +51,7 @@ You can chat with me naturally to manage your Google Sheets planner.
 • /view — Open your connected Google Sheets planner
 • /week — View your 7-day schedule
 • /auto [time] — Configure daily schedule notification (e.g. /auto 6:30pm, /auto off)
+• /n [task] at [time] — Schedule a task with a 5-minute reminder (e.g. /n self advising at 3pm)
 • /clear — Reset conversation context
 • /disconnect — Disconnect Telegram from your Excela account
 • /help — Show this help message`;
@@ -294,6 +296,21 @@ export async function POST(request: Request) {
         await sendTelegramReply(chatId, `Daily notifications enabled.\nTime: ${timeFormatted}`);
       }
 
+      return Response.json({ ok: true });
+    }
+
+    // Command: /n (task-specific reminder)
+    if (/^\/n(?:@\S+)?(?:\s+.*)?$/i.test(text)) {
+      const user = await findUserByTelegramId(sender.id);
+      if (!user) {
+        await sendTelegramReply(
+          chatId,
+          "Your Telegram account is not connected to Excela.\n\nPlease connect it from the Excela web settings first.",
+        );
+        return Response.json({ ok: true });
+      }
+
+      await handleReminderCommand(user, chatId, text);
       return Response.json({ ok: true });
     }
 

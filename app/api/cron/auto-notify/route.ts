@@ -1,4 +1,5 @@
 import { processDueNotifications } from "@/lib/telegram/auto-notify";
+import { processDueReminders } from "@/lib/telegram/reminders";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -24,8 +25,9 @@ async function handleCron(request: Request) {
   }
 
   try {
-    const result = await processDueNotifications();
-    return Response.json({ ok: true, ...result });
+    const reminders = await processDueReminders();
+    const daily = await processDueNotifications();
+    return Response.json({ ok: true, reminders, daily });
   } catch (error) {
     console.error("Cron auto-notify execution error:", error);
     return Response.json(

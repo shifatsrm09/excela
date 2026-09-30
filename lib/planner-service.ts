@@ -8,6 +8,7 @@
 import { GoogleAccessError, googleAccessToken } from "@/ai/google-auth";
 import type { UserDoc } from "@/lib/models";
 import { monthTabPattern } from "@/lib/sheet";
+import { taskRemindersCollection } from "@/lib/mongodb";
 
 export class PlannerError extends Error {
   constructor(message: string, readonly code?: string) { super(message); }
@@ -367,6 +368,16 @@ export async function moveEvent(user: UserDoc, input: { cell: string; sourceShee
 
   const createRes = await createEvent(user, { course: "", title: input.text, date: input.targetDate });
   
+  try {
+    const reminders = await taskRemindersCollection();
+    await reminders.updateMany(
+      { userId: user._id, cell: input.cell, enabled: true, sentAt: null },
+      { $set: { enabled: false, discardedAt: new Date(), discardReason: "moved", updatedAt: new Date() }, $unset: { processingLockUntil: "" } },
+    );
+  } catch {
+    // Best-effort reminder invalidation
+  }
+
   return { status: 'moved', from: { cell: input.cell, sheetId: input.sourceSheetId, date: input.sourceDate }, to: { cell: createRes.cell, sheetId: createRes.sheetId, date: input.targetDate }, label: createRes.label };
 }
 
@@ -388,6 +399,17 @@ export async function markEventComplete(user: UserDoc, input: { cell: string; sh
       }],
     }),
   });
+
+  try {
+    const reminders = await taskRemindersCollection();
+    await reminders.updateMany(
+      { userId: user._id, cell: input.cell, enabled: true, sentAt: null },
+      { $set: { enabled: false, discardedAt: new Date(), discardReason: "completed", updatedAt: new Date() }, $unset: { processingLockUntil: "" } },
+    );
+  } catch {
+    // Best-effort reminder invalidation
+  }
+
   return { status: 'completed', cell: input.cell, sheetId: input.sheetId };
 }
 
@@ -430,6 +452,17 @@ export async function deleteEvent(user: UserDoc, input: { cell: string; sheetId:
       }],
     }),
   });
+
+  try {
+    const reminders = await taskRemindersCollection();
+    await reminders.updateMany(
+      { userId: user._id, cell: input.cell, enabled: true, sentAt: null },
+      { $set: { enabled: false, discardedAt: new Date(), discardReason: "deleted", updatedAt: new Date() }, $unset: { processingLockUntil: "" } },
+    );
+  } catch {
+    // Best-effort reminder invalidation
+  }
+
   return { status: 'deleted', cell: input.cell };
 }
 

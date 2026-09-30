@@ -6,7 +6,8 @@
     "dev": "next dev --experimental-https",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "npx tsx --test test/reminders.test.ts"
   },
   "dependencies": {
     "google-auth-library": "^10.9.1",

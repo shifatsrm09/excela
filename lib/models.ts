@@ -54,6 +54,42 @@ export type UserTelegramConnection = {
   linkedAt: Date;
 };
 
+/** Collection `task_reminders`. Holds task-specific reminder notifications scheduled via `/n`. */
+export type TaskReminderDoc = {
+  _id: ObjectId;
+  userId: ObjectId;
+  telegramChatId: number;
+  /** Clean task title, e.g. "Self Advising" */
+  title: string;
+  /** Event date in YYYY-MM-DD */
+  date: string;
+  /** Event time in 24h format: "HH:mm" (e.g. "15:00") */
+  time: string;
+  /** Full event label stored in Google Sheets, e.g. "SELF ADVISING 3:00 PM" */
+  sheetLabel: string;
+  /** Google Sheets cell reference, e.g. "E5" */
+  cell?: string;
+  /** Google Sheets sheetId */
+  sheetId?: number;
+  /** Google Sheets rowIndex (0-based) */
+  rowIndex?: number;
+  /** User timezone (e.g. "Asia/Dhaka") */
+  timezone: string;
+  /** UTC Date when reminder should be sent (5 minutes before event) */
+  scheduledFor: Date;
+  /** Whether reminder is active */
+  enabled: boolean;
+  /** Timestamp when reminder was sent */
+  sentAt?: Date | null;
+  /** Lock for atomic cron claiming */
+  processingLockUntil?: Date | null;
+  /** Discard metadata if cancelled, completed, or deleted before reminder fired */
+  discardedAt?: Date | null;
+  discardReason?: "deleted" | "moved" | "time_changed" | "completed" | "cancelled";
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 /** Collection `telegram_linking_tokens`. Ephemeral one-time linking codes. */
 export type TelegramLinkingTokenDoc = {
   /** The linking code (e.g. 8-char alphanumeric). */

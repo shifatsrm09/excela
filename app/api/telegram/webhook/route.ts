@@ -359,7 +359,7 @@ export async function POST(request: Request) {
     }
 
     // Command: /broadcast <message> (Admin-only)
-    if (text === "/broadcast" || text.startsWith("/broadcast ") || text.startsWith("/broadcast@")) {
+    if (/^\/broadcast(?:@\S+)?(?:\s+[\s\S]*|$)/i.test(text)) {
       await handleBroadcastCommand(sender.id, chatId, text);
       return Response.json({ ok: true });
     }

@@ -64,6 +64,18 @@ describe("Telegram Admin Broadcast Feature", () => {
     assert.strictEqual(res.message, "Update:\n• Feature 1\n• Feature 2\n\nEnjoy planning!");
   });
 
+  // 6b. Command parsing with newline immediately after /broadcast
+  it("should correctly parse /broadcast followed immediately by newline", () => {
+    const textWithNewline = "/broadcast\nExcela Update:\nSet a task with a specific time.";
+    const res = parseBroadcastCommand(textWithNewline);
+    assert.strictEqual(res.isCommand, true);
+    assert.strictEqual(res.message, "Excela Update:\nSet a task with a specific time.");
+
+    // Webhook routing regex test
+    const webhookRoutingRegex = /^\/broadcast(?:@\S+)?(?:\s+[\s\S]*|$)/i;
+    assert.strictEqual(webhookRoutingRegex.test(textWithNewline), true);
+  });
+
   // 7. Missing message detection
   it("should detect missing message when only /broadcast is sent", () => {
     const res1 = parseBroadcastCommand("/broadcast");

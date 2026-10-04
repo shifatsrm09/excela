@@ -31,33 +31,33 @@ import { handleBroadcastCommand } from "@/lib/telegram/broadcast";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const HELP_MESSAGE = `Excela Planner Assistant 📅
+const HELP_MESSAGE = `Excela Planner Assistant
 
-You can chat with me naturally to manage your Google Sheets planner.
+Chat naturally with me to manage your planner.
 
-📅 Checking your schedule:
+Schedule
 • "What do I have today?"
 • "What's on my schedule tomorrow?"
-• "What does my week look like?"
-• "Do I have any unfinished deadlines?"
+• "What's happening this week?"
 
-✏️ Managing events & reminders:
-• "I have self advising at 7pm Oct 1" (automatically reminds you 5 mins before!)
+Tasks & reminders
 • "Gym tomorrow at 7pm"
-• "Meeting at 3pm"
-• "Gym on Oct 2" (untimed event)
+• "I have self advising at 7pm Oct 1"
+• "Gym on Oct 2"
 • "Move my meeting to Friday"
-• "Change the time to 4 PM"
+• "Change the time to 4pm"
 • "Mark that complete"
 
-💬 Commands:
-• /start [code] — Link your account or view status
-• /view — Open your connected Google Sheets planner
-• /week — View your 7-day schedule
-• /auto [time] — Configure daily schedule notification (e.g. /auto 6:30pm, /auto off)
-• /clear — Reset conversation context
-• /disconnect — Disconnect Telegram from your Excela account
-• /help — Show this help message`;
+Timed tasks are automatically reminded 5 minutes before.
+
+Commands
+• /start [code] — Connect your Excela account
+• /view — Open your Google Sheets planner
+• /week — View the next 7 days
+• /auto [time] — Get daily schedule updates
+• /clear — Clear conversation context
+• /disconnect — Disconnect Telegram
+• /help — Show this help`;
 
 export async function POST(request: Request) {
   try {

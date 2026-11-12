@@ -274,6 +274,16 @@ export function extractEventTitle(rawText: string, course: string | null): strin
   return text;
 }
 
+export const PRONOUN_TARGETS = new Set([
+  "it", "that", "this", "the event", "the task", "the one", "the item",
+  "it please", "that please", "this please", "previous", "last", "last one",
+]);
+
+export function isPronounOrEmpty(text: string): boolean {
+  const clean = text.toLowerCase().trim().replace(/[?!.,;:]+$/, "");
+  return !clean || PRONOUN_TARGETS.has(clean);
+}
+
 export type ParsedIntent =
   | {
       type: "CREATE_EVENT";
@@ -366,33 +376,33 @@ export function parseSmartInput(rawInput: string, today: string): ParsedIntent {
   }
 
   // 3. Mark complete / incomplete
-  const markCompleteMatch = /^(?:mark\s+(.+?)\s+(?:as\s+)?(?:complete|done|finished)|(?:complete|finish|done\s+with)\s+(.+))$/i.exec(inputCleaned);
+  const markCompleteMatch = /^(?:mark\s+(.+?)\s+(?:as\s+)?(?:complete|done|finished)|(?:complete|finish|done\s+with)(?:\s+(.+))?)$/i.exec(inputCleaned);
   if (markCompleteMatch) {
     const target = (markCompleteMatch[1] || markCompleteMatch[2] || "").trim();
-    if (target) return { type: "MARK_COMPLETE", targetText: target };
+    return { type: "MARK_COMPLETE", targetText: target || "it" };
   }
 
-  const markIncompleteMatch = /^(?:mark\s+(.+?)\s+(?:as\s+)?(?:incomplete|pending|uncompleted)|(?:uncomplete|reopen)\s+(.+))$/i.exec(inputCleaned);
+  const markIncompleteMatch = /^(?:mark\s+(.+?)\s+(?:as\s+)?(?:incomplete|pending|uncompleted)|(?:uncomplete|reopen)(?:\s+(.+))?)$/i.exec(inputCleaned);
   if (markIncompleteMatch) {
     const target = (markIncompleteMatch[1] || markIncompleteMatch[2] || "").trim();
-    if (target) return { type: "MARK_INCOMPLETE", targetText: target };
+    return { type: "MARK_INCOMPLETE", targetText: target || "it" };
   }
 
   // 4. Delete / Remove
-  const deleteMatch = /^(?:delete|remove|cancel)\s+(.+)$/i.exec(inputCleaned);
-  if (deleteMatch && !/^(?:account|sheet|planner)$/i.test(deleteMatch[1].trim())) {
-    const target = deleteMatch[1].trim();
-    return { type: "DELETE_EVENT", targetText: target };
+  const deleteMatch = /^(?:delete|remove|cancel)(?:\s+(.+))?$/i.exec(inputCleaned);
+  if (deleteMatch && !/^(?:account|sheet|planner)$/i.test((deleteMatch[1] || "").trim())) {
+    const target = (deleteMatch[1] || "").trim();
+    return { type: "DELETE_EVENT", targetText: target || "it" };
   }
 
   // 5. Move / Reschedule
-  const moveMatch = /^(?:move|reschedule)\s+(.+?)\s+(?:to|for)\s+(.+)$/i.exec(inputCleaned);
+  const moveMatch = /^(?:move|reschedule)(?:\s+(.+?))?\s+(?:to|for)\s+(.+)$/i.exec(inputCleaned);
   if (moveMatch) {
-    const target = moveMatch[1].trim();
+    const target = (moveMatch[1] || "").trim();
     const datePart = moveMatch[2].trim();
     const { date: targetDate } = extractDate(datePart, today);
     if (targetDate) {
-      return { type: "MOVE_EVENT", targetText: target, targetDate };
+      return { type: "MOVE_EVENT", targetText: target || "it", targetDate };
     }
   }
 

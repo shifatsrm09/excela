@@ -1,7 +1,7 @@
 import type { UserDoc } from "@/lib/models";
 import { PlannerError, findEventsDetailed } from "@/lib/planner-service";
 import { executeTool, type ToolCallLog } from "@/lib/agent/executor";
-import { parseSmartInput, addDays } from "@/lib/agent/string-parser";
+import { parseSmartInput, addDays, isPronounOrEmpty } from "@/lib/agent/string-parser";
 
 export class AgentError extends Error {
   constructor(message: string, readonly status = 502) { super(message); }
@@ -27,6 +27,57 @@ function formatDateReadable(dateStr: string): string {
   } catch {
     return dateStr;
   }
+}
+
+type ContextEvent = {
+  label: string;
+  cell?: string;
+  date?: string;
+};
+
+/**
+ * Resolves the most recently referenced event from conversation history.
+ * Parses assistant confirmations (e.g. "Added CSE550 QUIZ to your planner for Nov 27, 2026 (Cell E29)")
+ * and user messages to accurately resolve pronouns like "it", "that", "this".
+ */
+export function resolveRecentEventFromHistory(history: AgentMessage[]): ContextEvent | null {
+  if (!Array.isArray(history) || history.length === 0) return null;
+
+  for (let i = history.length - 1; i >= 0; i--) {
+    const msg = history[i];
+    if (!msg || typeof msg.content !== "string") continue;
+
+    // Pattern 1: Added [label] to your planner for [date] (Cell [cell])
+    const addedMatch = /Added\s+(?:\*\*)?(.+?)(?:\*\*)?\s+to\s+your\s+planner\s+for\s+([^()]+?)(?:\s+\(Cell\s+([EFGH]\d+)\))?[.)]/i.exec(msg.content);
+    if (addedMatch) {
+      return {
+        label: addedMatch[1].replace(/[*_`]/g, "").trim(),
+        date: addedMatch[2].replace(/[*_`]/g, "").trim(),
+        cell: addedMatch[3],
+      };
+    }
+
+    // Pattern 2: Marked [label] ... as completed / pending
+    const markedMatch = /Marked\s+(?:\*\*)?(.+?)(?:\*\*)?\s+(?:on\s+([^()]+?)\s+)?as\s+(?:completed|pending)/i.exec(msg.content);
+    if (markedMatch) {
+      return {
+        label: markedMatch[1].replace(/[*_`]/g, "").trim(),
+        date: markedMatch[2]?.replace(/[*_`]/g, "").trim(),
+      };
+    }
+
+    // Pattern 3: Cell reference with label: "[label] ... (Cell [cell])"
+    const cellMatch = /(?:^|\n|•\s*)(?:\*\*)?([A-Za-z0-9\s:_-]+?)(?:\*\*)?\s+on\s+([^()]+?)\s+\(Cell\s+([EFGH]\d+)/i.exec(msg.content);
+    if (cellMatch) {
+      return {
+        label: cellMatch[1].replace(/[*_`]/g, "").trim(),
+        date: cellMatch[2].replace(/[*_`]/g, "").trim(),
+        cell: cellMatch[3],
+      };
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -79,7 +130,7 @@ export async function runSmartAgent(
         const dateDesc = isToday ? `today (${intent.date})` : isTomorrow ? `tomorrow (${intent.date})` : formatDateReadable(intent.date);
 
         if (result.status === "created") {
-          let msg = `Added **${result.label}** to your planner for ${dateDesc}${result.cell ? ` (Cell ${result.cell})` : ""}.`;
+          let msg = `Added ${result.label} to your planner for ${dateDesc}${result.cell ? ` (Cell ${result.cell})` : ""}.`;
           if (result.reminderSet && result.reminderTime) {
             msg += `\n⏰ In 5 minutes before the event (${result.reminderTime}), you will receive a Telegram reminder.`;
           }
@@ -88,7 +139,7 @@ export async function runSmartAgent(
           }
           reply = msg;
         } else if (result.status === "duplicate") {
-          reply = `ℹ️ **${result.label}** is already on your planner for ${dateDesc}.`;
+          reply = `ℹ️ ${result.label} is already on your planner for ${dateDesc}.`;
         }
         break;
       }
@@ -145,7 +196,7 @@ export async function runSmartAgent(
         } else {
           reply = `Here is your schedule for this week:\n\n` +
             daysWithEvents
-              .map((day) => `📅 **${formatDateReadable(day.date)}**:\n` + day.slots.map((s) => `  • [${s.status.toUpperCase()}] ${s.text}`).join("\n"))
+              .map((day) => `📅 ${formatDateReadable(day.date)}:\n` + day.slots.map((s) => `  • [${s.status.toUpperCase()}] ${s.text}`).join("\n"))
               .join("\n\n");
         }
         break;
@@ -166,7 +217,7 @@ export async function runSmartAgent(
         } else {
           reply = `Here are your upcoming deadlines:\n\n` +
             daysWithDeadlines
-              .map((day) => `📅 **${formatDateReadable(day.date)}**:\n` + day.slots.map((s) => `  • ${s.text}`).join("\n"))
+              .map((day) => `📅 ${formatDateReadable(day.date)}:\n` + day.slots.map((s) => `  • ${s.text}`).join("\n"))
               .join("\n\n");
         }
         break;
@@ -187,7 +238,7 @@ export async function runSmartAgent(
         } else {
           reply = `Here are your unfinished tasks from the past 30 days:\n\n` +
             daysWithUnfinished
-              .map((day) => `📅 **${formatDateReadable(day.date)}**:\n` + day.slots.map((s) => `  • ${s.text}`).join("\n"))
+              .map((day) => `📅 ${formatDateReadable(day.date)}:\n` + day.slots.map((s) => `  • ${s.text}`).join("\n"))
               .join("\n\n");
         }
         break;
@@ -206,7 +257,7 @@ export async function runSmartAgent(
           reply = `No events found matching "${intent.query}".`;
         } else {
           reply = `Found ${result.totalMatches} event(s) matching "${intent.query}":\n\n` +
-            result.matches.map((m) => `• **${m.text}** on ${formatDateReadable(m.date)} (Cell ${m.cell}, ${m.status.toUpperCase()})`).join("\n");
+            result.matches.map((m) => `• ${m.text} on ${formatDateReadable(m.date)} (Cell ${m.cell}, ${m.status.toUpperCase()})`).join("\n");
         }
         break;
       }
@@ -214,16 +265,31 @@ export async function runSmartAgent(
       case "MARK_COMPLETE": {
         const fromDate = addDays(today, -30);
         const toDate = addDays(today, 60);
-        const matches = await runner.findEventsDetailed(user, intent.targetText, fromDate, toDate);
-        if (!matches.length) {
-          reply = `Could not find an event matching "${intent.targetText}" to mark complete.`;
+
+        let target = intent.targetText.trim();
+        let targetCell: string | undefined;
+
+        if (isPronounOrEmpty(target)) {
+          const recent = resolveRecentEventFromHistory(history);
+          if (!recent) {
+            reply = "Which event would you like to mark complete? Please specify the name, for example: 'complete CSE550 Quiz'.";
+            break;
+          }
+          target = recent.label;
+          targetCell = recent.cell;
+        }
+
+        const matches = await runner.findEventsDetailed(user, target, fromDate, toDate);
+        const match = (targetCell ? matches.find((m) => m.cell === targetCell) : undefined) || matches[0];
+
+        if (!match) {
+          reply = `Could not find an event matching "${target}" to mark complete.`;
         } else {
-          const match = matches[0];
           const toolName = "mark_complete";
           const args = { cell: match.cell, sheetId: match.sheetId };
           const result = await runner.executeTool(toolName, args, user, today);
           log.push({ name: toolName, args, ok: true, result });
-          reply = `Marked **${match.text}** on ${formatDateReadable(match.date)} as completed! 🎉`;
+          reply = `Marked ${match.text} on ${formatDateReadable(match.date)} as completed! 🎉`;
         }
         break;
       }
@@ -231,16 +297,31 @@ export async function runSmartAgent(
       case "MARK_INCOMPLETE": {
         const fromDate = addDays(today, -30);
         const toDate = addDays(today, 60);
-        const matches = await runner.findEventsDetailed(user, intent.targetText, fromDate, toDate);
-        if (!matches.length) {
-          reply = `Could not find an event matching "${intent.targetText}" to mark pending.`;
+
+        let target = intent.targetText.trim();
+        let targetCell: string | undefined;
+
+        if (isPronounOrEmpty(target)) {
+          const recent = resolveRecentEventFromHistory(history);
+          if (!recent) {
+            reply = "Which event would you like to mark pending? Please specify the name, for example: 'mark CSE550 Quiz pending'.";
+            break;
+          }
+          target = recent.label;
+          targetCell = recent.cell;
+        }
+
+        const matches = await runner.findEventsDetailed(user, target, fromDate, toDate);
+        const match = (targetCell ? matches.find((m) => m.cell === targetCell) : undefined) || matches[0];
+
+        if (!match) {
+          reply = `Could not find an event matching "${target}" to mark pending.`;
         } else {
-          const match = matches[0];
           const toolName = "mark_incomplete";
           const args = { cell: match.cell, sheetId: match.sheetId };
           const result = await runner.executeTool(toolName, args, user, today);
           log.push({ name: toolName, args, ok: true, result });
-          reply = `Marked **${match.text}** on ${formatDateReadable(match.date)} as pending.`;
+          reply = `Marked ${match.text} on ${formatDateReadable(match.date)} as pending.`;
         }
         break;
       }
@@ -248,16 +329,31 @@ export async function runSmartAgent(
       case "DELETE_EVENT": {
         const fromDate = addDays(today, -30);
         const toDate = addDays(today, 60);
-        const matches = await runner.findEventsDetailed(user, intent.targetText, fromDate, toDate);
-        if (!matches.length) {
-          reply = `Could not find an event matching "${intent.targetText}" to delete.`;
+
+        let target = intent.targetText.trim();
+        let targetCell: string | undefined;
+
+        if (isPronounOrEmpty(target)) {
+          const recent = resolveRecentEventFromHistory(history);
+          if (!recent) {
+            reply = "Which event would you like to delete? Please specify the name, for example: 'delete CSE550 Quiz'.";
+            break;
+          }
+          target = recent.label;
+          targetCell = recent.cell;
+        }
+
+        const matches = await runner.findEventsDetailed(user, target, fromDate, toDate);
+        const match = (targetCell ? matches.find((m) => m.cell === targetCell) : undefined) || matches[0];
+
+        if (!match) {
+          reply = `Could not find an event matching "${target}" to delete.`;
         } else {
-          const match = matches[0];
           const toolName = "delete_event";
           const args = { cell: match.cell, sheetId: match.sheetId };
           const result = await runner.executeTool(toolName, args, user, today);
           log.push({ name: toolName, args, ok: true, result });
-          reply = `Deleted **${match.text}** from your planner (${formatDateReadable(match.date)}, Cell ${match.cell}).`;
+          reply = `Deleted ${match.text} from your planner (${formatDateReadable(match.date)}, Cell ${match.cell}).`;
         }
         break;
       }
@@ -265,11 +361,26 @@ export async function runSmartAgent(
       case "MOVE_EVENT": {
         const fromDate = addDays(today, -30);
         const toDate = addDays(today, 60);
-        const matches = await runner.findEventsDetailed(user, intent.targetText, fromDate, toDate);
-        if (!matches.length) {
-          reply = `Could not find an event matching "${intent.targetText}" to move.`;
+
+        let target = intent.targetText.trim();
+        let targetCell: string | undefined;
+
+        if (isPronounOrEmpty(target)) {
+          const recent = resolveRecentEventFromHistory(history);
+          if (!recent) {
+            reply = `Which event would you like to move? Please specify the name, for example: 'move CSE550 Quiz to ${formatDateReadable(intent.targetDate)}'.`;
+            break;
+          }
+          target = recent.label;
+          targetCell = recent.cell;
+        }
+
+        const matches = await runner.findEventsDetailed(user, target, fromDate, toDate);
+        const match = (targetCell ? matches.find((m) => m.cell === targetCell) : undefined) || matches[0];
+
+        if (!match) {
+          reply = `Could not find an event matching "${target}" to move.`;
         } else {
-          const match = matches[0];
           const toolName = "move_event";
           const args = {
             cell: match.cell,
@@ -281,7 +392,7 @@ export async function runSmartAgent(
           };
           const result = await runner.executeTool(toolName, args, user, today);
           log.push({ name: toolName, args, ok: true, result });
-          reply = `Moved **${match.text}** to ${formatDateReadable(intent.targetDate)}.`;
+          reply = `Moved ${match.text} to ${formatDateReadable(intent.targetDate)}.`;
         }
         break;
       }
@@ -290,11 +401,11 @@ export async function runSmartAgent(
       default: {
         reply = "Hi! I'm Excela, your smart planner assistant.\n\n" +
           "You can chat with me naturally to manage your planner:\n" +
-          "• **Add timed tasks**: `I have self advising at 7pm tomorrow`\n" +
-          "• **Add academic tasks**: `CSE340 Quiz 2 on Friday at 3pm`\n" +
-          "• **Add untimed tasks**: `Gym Oct 2` or `Assignment due tomorrow`\n" +
-          "• **Check schedule**: `What do I have today?` or `What's on this week?`\n" +
-          "• **Update status**: `Mark Quiz 2 complete` or `Delete Gym`\n\n" +
+          "• Add timed tasks: \"I have self advising at 7pm tomorrow\"\n" +
+          "• Add academic tasks: \"CSE340 Quiz 2 on Friday at 3pm\"\n" +
+          "• Add untimed tasks: \"Gym Oct 2\" or \"Assignment due tomorrow\"\n" +
+          "• Check schedule: \"What do I have today?\" or \"What's on this week?\"\n" +
+          "• Update status: \"Mark Quiz 2 complete\" or \"Delete Gym\" or \"Delete it\"\n\n" +
           "⏰ Any event with an explicit clock time automatically gets a 5-minute pre-event reminder!";
         break;
       }

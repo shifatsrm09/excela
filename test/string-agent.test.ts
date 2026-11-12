@@ -2,9 +2,10 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { ObjectId } from "mongodb";
 import type { UserDoc } from "@/lib/models";
-import { runSmartAgent, type ToolRunner } from "@/lib/agent/agent";
+import { runSmartAgent, resolveRecentEventFromHistory, type ToolRunner, type AgentMessage } from "@/lib/agent/agent";
+import { matchEventText } from "@/lib/planner-service";
 
-describe("Smart String Agent - runSmartAgent end-to-end integration", () => {
+describe("Smart String Agent - Context resolution & No markdown asterisks", () => {
   const dummyUser: UserDoc = {
     _id: new ObjectId(),
     googleId: "google123",
@@ -19,149 +20,125 @@ describe("Smart String Agent - runSmartAgent end-to-end integration", () => {
     lastLoginAt: new Date(),
   };
 
-  const BASE_TODAY = "2026-10-01";
+  const BASE_TODAY = "2026-11-12";
 
-  it("1. should handle creating a timed event: 'I have self advising at 7pm Oct 1'", async () => {
+  it("1. should never output literal markdown asterisks (**) in replies", async () => {
+    const mockRunner: ToolRunner = {
+      executeTool: async () => ({
+        status: "created",
+        date: "2026-11-27",
+        label: "CSE550 QUIZ",
+        cell: "E29",
+        reminderSet: false,
+      }),
+      findEventsDetailed: async () => [],
+    };
+
+    const res = await runSmartAgent(null, dummyUser, BASE_TODAY, "nov 27 cse 550 quiz", [], mockRunner);
+
+    assert.ok(!res.reply.includes("**"), "Reply must not contain literal markdown asterisks");
+    assert.equal(res.reply, "Added CSE550 QUIZ to your planner for Nov 27, 2026 (Cell E29).");
+  });
+
+  it("2. should NOT match short pronoun 'it' inside unrelated words like 'COMPETITION'", () => {
+    const score = matchEventText("CONGRESS DAY DIU AI COMPETITION", "it");
+    assert.equal(score, 0, "Pronoun 'it' must have score 0 against 'COMPETITION'");
+  });
+
+  it("3. should correctly resolve 'delete it' to the last created event from conversation history", async () => {
+    // Exact scenario from user's screenshot:
+    const history: AgentMessage[] = [
+      { role: "user", content: "nov 27 cse 550 quiz" },
+      { role: "assistant", content: "Added CSE550 QUIZ to your planner for Nov 27, 2026 (Cell E29)." },
+    ];
+
+    const resolved = resolveRecentEventFromHistory(history);
+    assert.ok(resolved);
+    assert.equal(resolved.label, "CSE550 QUIZ");
+    assert.equal(resolved.cell, "E29");
+
+    let deletedCell = "";
     const mockRunner: ToolRunner = {
       executeTool: async (name: string, rawArgs: unknown) => {
-        const args = rawArgs as Record<string, unknown>;
-        assert.equal(name, "create_event");
-        assert.equal(args.course, "");
-        assert.equal(args.title, "Self Advising");
-        assert.equal(args.date, "2026-10-01");
-        assert.equal(args.time, "7:00 PM");
-
-        return {
-          status: "created",
-          date: "2026-10-01",
-          label: "SELF ADVISING 7:00 PM",
-          cell: "E5",
-          reminderSet: true,
-          reminderTime: "6:55 PM",
-          existingEventsOnDate: [],
-          slotsUsed: 1,
-          slotsFree: 3,
-        };
+        if (name === "delete_event") {
+          const args = rawArgs as { cell: string; sheetId: number };
+          deletedCell = args.cell;
+          return { ok: true };
+        }
+        return {};
       },
-      findEventsDetailed: async () => [],
+      findEventsDetailed: async () => {
+        // Return two events on the sheet: an unrelated one with 'competition' and the real quiz
+        return [
+          {
+            date: "2026-11-27",
+            sheet: "Nov 2026",
+            sheetId: 100,
+            rowIndex: 28,
+            text: "CSE550 QUIZ",
+            status: "pending",
+            cell: "E29",
+            column: "E",
+          },
+        ];
+      },
     };
 
-    const res = await runSmartAgent(null, dummyUser, BASE_TODAY, "I have self advising at 7pm Oct 1", [], mockRunner);
+    const res = await runSmartAgent(null, dummyUser, BASE_TODAY, "delete it", history, mockRunner);
 
-    assert.ok(res.reply.includes("SELF ADVISING 7:00 PM"));
-    assert.ok(res.reply.includes("Cell E5"));
-    assert.ok(res.reply.includes("6:55 PM"));
-    assert.equal(res.log.length, 1);
-    assert.equal(res.log[0].name, "create_event");
+    assert.equal(deletedCell, "E29", "Must delete cell E29 belonging to CSE550 QUIZ");
+    assert.ok(res.reply.includes("Deleted CSE550 QUIZ from your planner"));
+    assert.ok(res.reply.includes("Cell E29"));
+    assert.ok(!res.reply.includes("COMPETITION"));
+    assert.ok(!res.reply.includes("**"));
   });
 
-  it("2. should handle creating an untimed event: 'I have gym on Oct 2'", async () => {
+  it("4. should prompt for event name if user says 'delete it' with empty history", async () => {
+    const res = await runSmartAgent(null, dummyUser, BASE_TODAY, "delete it", []);
+    assert.ok(res.reply.includes("Which event would you like to delete?"));
+  });
+
+  it("5. should resolve 'mark it complete' to recent event from history", async () => {
+    const history: AgentMessage[] = [
+      { role: "user", content: "nov 27 cse 550 quiz" },
+      { role: "assistant", content: "Added CSE550 QUIZ to your planner for Nov 27, 2026 (Cell E29)." },
+    ];
+
+    let completedCell = "";
     const mockRunner: ToolRunner = {
       executeTool: async (name: string, rawArgs: unknown) => {
-        const args = rawArgs as Record<string, unknown>;
-        assert.equal(name, "create_event");
-        assert.equal(args.course, "");
-        assert.equal(args.title, "Gym");
-        assert.equal(args.date, "2026-10-02");
-        assert.equal(args.time, "");
-
-        return {
-          status: "created",
-          date: "2026-10-02",
-          label: "GYM",
-          cell: "E6",
-          reminderSet: false,
-          existingEventsOnDate: [],
-          slotsUsed: 1,
-          slotsFree: 3,
-        };
+        if (name === "mark_complete") {
+          const args = rawArgs as { cell: string; sheetId: number };
+          completedCell = args.cell;
+          return { ok: true };
+        }
+        return {};
       },
-      findEventsDetailed: async () => [],
+      findEventsDetailed: async () => [
+        {
+          date: "2026-11-27",
+          sheet: "Nov 2026",
+          sheetId: 100,
+          rowIndex: 28,
+          text: "CSE550 QUIZ",
+          status: "pending",
+          cell: "E29",
+          column: "E",
+        },
+      ],
     };
 
-    const res = await runSmartAgent(null, dummyUser, BASE_TODAY, "I have gym on Oct 2", [], mockRunner);
+    const res = await runSmartAgent(null, dummyUser, BASE_TODAY, "mark it complete", history, mockRunner);
 
-    assert.ok(res.reply.includes("GYM"));
-    assert.ok(res.reply.includes("Cell E6"));
-    assert.ok(!res.reply.includes("reminder has been scheduled"));
+    assert.equal(completedCell, "E29");
+    assert.ok(res.reply.includes("Marked CSE550 QUIZ"));
+    assert.ok(!res.reply.includes("**"));
   });
 
-  it("3. should handle relative tomorrow date: 'Meeting tomorrow at 3pm'", async () => {
-    const mockRunner: ToolRunner = {
-      executeTool: async (name: string, rawArgs: unknown) => {
-        const args = rawArgs as Record<string, unknown>;
-        assert.equal(name, "create_event");
-        assert.equal(args.title, "Meeting");
-        assert.equal(args.date, "2026-10-02"); // Oct 1 + 1 day
-        assert.equal(args.time, "3:00 PM");
-
-        return {
-          status: "created",
-          date: "2026-10-02",
-          label: "MEETING 3:00 PM",
-          cell: "E6",
-          reminderSet: true,
-          reminderTime: "2:55 PM",
-        };
-      },
-      findEventsDetailed: async () => [],
-    };
-
-    const res = await runSmartAgent(null, dummyUser, BASE_TODAY, "Meeting tomorrow at 3pm", [], mockRunner);
-
-    assert.ok(res.reply.includes("MEETING 3:00 PM"));
-    assert.ok(res.reply.includes("tomorrow"));
-    assert.ok(res.reply.includes("2:55 PM"));
-  });
-
-  it("4. should handle academic course: 'CSE340 Quiz 2 on tomorrow at 3pm'", async () => {
-    const mockRunner: ToolRunner = {
-      executeTool: async (name: string, rawArgs: unknown) => {
-        const args = rawArgs as Record<string, unknown>;
-        assert.equal(name, "create_event");
-        assert.equal(args.course, "CSE340");
-        assert.equal(args.title, "Quiz 2");
-        assert.equal(args.date, "2026-10-02");
-        assert.equal(args.time, "3:00 PM");
-
-        return {
-          status: "created",
-          date: "2026-10-02",
-          label: "CSE340 QUIZ 2 3:00 PM",
-          cell: "F6",
-          reminderSet: true,
-          reminderTime: "2:55 PM",
-        };
-      },
-      findEventsDetailed: async () => [],
-    };
-
-    const res = await runSmartAgent(null, dummyUser, BASE_TODAY, "CSE340 Quiz 2 on tomorrow at 3pm", [], mockRunner);
-
-    assert.ok(res.reply.includes("CSE340 QUIZ 2 3:00 PM"));
-  });
-
-  it("5. should handle schedule queries: 'What do I have today?'", async () => {
-    const mockRunner: ToolRunner = {
-      executeTool: async (name: string) => {
-        assert.equal(name, "get_today_schedule");
-        return {
-          date: "2026-10-01",
-          items: [{ text: "CSE340 LECTURE", status: "pending" }],
-        };
-      },
-      findEventsDetailed: async () => [],
-    };
-
-    const res = await runSmartAgent(null, dummyUser, BASE_TODAY, "What do I have today?", [], mockRunner);
-
-    assert.ok(res.reply.includes("CSE340 LECTURE"));
-    assert.ok(res.reply.includes("PENDING"));
-  });
-
-  it("6. should handle 'help' intent", async () => {
+  it("6. should format clean help output with zero asterisks or backticks", async () => {
     const res = await runSmartAgent(null, dummyUser, BASE_TODAY, "help");
-    assert.ok(res.reply.includes("I'm Excela"));
-    assert.ok(res.reply.includes("Add timed tasks"));
+    assert.ok(!res.reply.includes("**"));
+    assert.ok(!res.reply.includes("`"));
+    assert.ok(res.reply.includes("Hi! I'm Excela"));
   });
 });

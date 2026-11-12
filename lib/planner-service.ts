@@ -298,18 +298,64 @@ const CLEAR_FORMAT = { backgroundColorStyle: { rgbColor: { red: 1, green: 1, blu
 
 export type EventMatch = { date: string; sheet: string; sheetId: number; rowIndex: number; text: string; status: DaySlot['status']; cell: string; column: string };
 
+export function matchEventText(slotText: string, needle: string): number {
+  const textLower = slotText.toLowerCase().trim();
+  const needleLower = needle.toLowerCase().trim();
+  if (!textLower || !needleLower) return 0;
+
+  // Exact match
+  if (textLower === needleLower) return 100;
+
+  // Whole word match (e.g. "CSE550 QUIZ" has words "cse550", "quiz")
+  const escaped = needleLower.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const wordRegex = new RegExp(`(^|\\s|[-_])${escaped}($|\\s|[-_])`, "i");
+  if (wordRegex.test(textLower)) return 80;
+
+  // Prefix match (slot text starts with needle)
+  if (textLower.startsWith(needleLower)) return 60;
+
+  // Normalized alphanumeric match (e.g. "cse 550 quiz" matches "CSE550 QUIZ")
+  const textNormalized = textLower.replace(/[^a-z0-9]/g, "");
+  const needleNormalized = needleLower.replace(/[^a-z0-9]/g, "");
+  if (needleNormalized.length >= 3 && textNormalized.includes(needleNormalized)) return 55;
+
+  // Multi-word all words match (e.g. "cse 550 quiz" matches "CSE550 QUIZ")
+  const words = needleLower.split(/\s+/).filter(Boolean);
+  if (words.length > 1 && words.every((w) => textLower.includes(w))) return 50;
+
+  // Substring match ONLY if needle is at least 4 characters and not a pronoun
+  if (needleLower.length >= 4 && textLower.includes(needleLower)) return 30;
+
+  return 0;
+}
+
 export async function findEventsDetailed(user: UserDoc, query: string, from: string, to: string): Promise<EventMatch[]> {
   const needle = query.trim().toLowerCase();
   if (!needle) throw new PlannerError('Provide text to search for.', 'invalid_query');
   const days = await getSchedule(user, from, to);
-  return days.flatMap((day) =>
-    day.slots
-      .filter((slot) => slot.text.toLowerCase().includes(needle))
-      .map((slot) => ({
-        date: day.date, sheet: day.sheet, sheetId: day.sheetId, rowIndex: day.rowIndex,
-        text: slot.text, status: slot.status, cell: `${slot.column}${day.rowIndex + 1}`, column: slot.column,
-      })),
-  );
+  const matches: (EventMatch & { score: number })[] = [];
+
+  for (const day of days) {
+    for (const slot of day.slots) {
+      const score = matchEventText(slot.text, needle);
+      if (score > 0) {
+        matches.push({
+          date: day.date,
+          sheet: day.sheet,
+          sheetId: day.sheetId,
+          rowIndex: day.rowIndex,
+          text: slot.text,
+          status: slot.status,
+          cell: `${slot.column}${day.rowIndex + 1}`,
+          column: slot.column,
+          score,
+        });
+      }
+    }
+  }
+
+  matches.sort((a, b) => b.score - a.score || b.date.localeCompare(a.date));
+  return matches;
 }
 
 function parseCellRef(cell: string): { column: string; rowIndex: number } {

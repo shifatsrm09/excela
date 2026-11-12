@@ -29,7 +29,7 @@ export function sessionPayload(user: UserDoc): Session {
       ? { url: user.sheetUrl, title: user.sheetTitle ?? "Planner", generated: user.generatedSheetId === user.sheetId }
       : null,
     hasGeneratedPlanner: Boolean(user.generatedSheetId),
-    hasApiKey: Boolean(user.ollamaApiKey && decrypt(user.ollamaApiKey)),
+    hasApiKey: true,
     googleAccess: Boolean(user.googleScopes?.includes(driveFileScope) && user.refreshToken && decrypt(user.refreshToken)),
     telegram: user.telegram
       ? {

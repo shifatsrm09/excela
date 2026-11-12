@@ -1,98 +1,318 @@
 import type { UserDoc } from "@/lib/models";
-import { buildSmartInstruction } from "@/ai/smart-instruction";
-import { PlannerError } from "@/lib/planner-service";
-import { agentTools, executeTool, MAX_TOOL_CALLS_PER_REQUEST, type ToolCallLog } from "@/lib/agent/executor";
+import { PlannerError, findEventsDetailed } from "@/lib/planner-service";
+import { executeTool, type ToolCallLog } from "@/lib/agent/executor";
+import { parseSmartInput, addDays } from "@/lib/agent/string-parser";
 
 export class AgentError extends Error {
   constructor(message: string, readonly status = 502) { super(message); }
 }
 
 export type AgentMessage = { role: "system" | "user" | "assistant" | "tool"; content: string; tool_calls?: unknown; name?: string };
-type ToolCall = { function: { name: string; arguments: unknown } };
 
-function parseToolCalls(raw: unknown): ToolCall[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.filter((item): item is ToolCall =>
-    Boolean(item && typeof item === "object" && "function" in item &&
-      item.function && typeof item.function === "object" && typeof (item.function as { name?: unknown }).name === "string"));
+export type ToolRunner = {
+  executeTool: (name: string, args: unknown, user: UserDoc, today: string) => Promise<unknown>;
+  findEventsDetailed: typeof findEventsDetailed;
+};
+
+export const defaultToolRunner: ToolRunner = {
+  executeTool,
+  findEventsDetailed,
+};
+
+function formatDateReadable(dateStr: string): string {
+  try {
+    const [y, m, d] = dateStr.split("-").map(Number);
+    const date = new Date(Date.UTC(y, m - 1, d));
+    return date.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric", timeZone: "UTC" });
+  } catch {
+    return dateStr;
+  }
 }
 
 /**
- * The controlled Smart agent loop: send the conversation history + registered tools to Ollama,
- * execute any tool the model asks for through the validated executor, feed the real result back,
- * and repeat until the model gives a final answer or the call-count budget runs out.
+ * Smart String Verification Agent:
+ * Deterministically and smartly parses user natural-language requests into structured planner operations.
+ * Extracts course codes, event titles, explicit dates (today, tomorrow, calendar dates, weekdays),
+ * and times. Operates on the user's planner with full conflict checking, duplicate detection, and
+ * automatic 5-minute pre-event reminders.
  */
 export async function runSmartAgent(
-  apiKey: string,
+  _apiKey: string | null | undefined,
   user: UserDoc,
   today: string,
   userMessage: string,
-  history: AgentMessage[] = []
+  history: AgentMessage[] = [],
+  runner: ToolRunner = defaultToolRunner
 ): Promise<{ reply: string; log: ToolCallLog[]; history: AgentMessage[] }> {
-  const sanitizedHistory: AgentMessage[] = history
-    .filter((msg) => msg && typeof msg === "object" && (msg.role === "user" || msg.role === "assistant" || msg.role === "tool"))
-    .slice(-20);
-
-  const messages: AgentMessage[] = [
-    { role: "system", content: buildSmartInstruction(today) },
-    ...sanitizedHistory,
-    { role: "user", content: userMessage },
-  ];
+  const intent = parseSmartInput(userMessage, today);
   const log: ToolCallLog[] = [];
 
-  for (let iteration = 0; iteration < MAX_TOOL_CALLS_PER_REQUEST; iteration++) {
-    const result = await fetch("https://ollama.com/api/chat", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: "gemma4:31b", stream: false, messages, tools: agentTools }),
-      signal: AbortSignal.timeout(60_000),
-    });
-    if (!result.ok) {
-      const errors: Record<number, string> = {
-        401: "Ollama returned an authentication error (401) for your saved key. Save the full secret from ollama.com/settings/keys in Setup.",
-        402: "Ollama requires paid usage for this request (402). Check model access in your Ollama account.",
-        403: "Ollama denied access. Check your API key and model access.",
-        404: "Ollama could not find gemma4:31b.",
-        429: "Ollama quota or rate limit reached. Please try again later.",
-      };
-      throw new AgentError(errors[result.status] ?? `Ollama request failed (${result.status}). Please try again later.`, result.status === 429 ? 429 : 502);
-    }
-    const data = await result.json();
-    const assistantMessage = data?.message;
-    if (!assistantMessage || typeof assistantMessage !== "object") {
-      throw new AgentError("Ollama returned an unexpected response. Please try again.");
-    }
-    const toolCalls = parseToolCalls(assistantMessage.tool_calls);
+  let reply = "";
 
-    if (!toolCalls.length) {
-      const text = typeof assistantMessage.content === "string" ? assistantMessage.content.trim() : "";
-      if (!text) throw new AgentError("Ollama returned no text. Please try again.");
-      messages.push({ role: "assistant", content: text });
-      return { reply: text, log, history: messages.slice(1) };
-    }
+  try {
+    switch (intent.type) {
+      case "CREATE_EVENT": {
+        const toolName = "create_event";
+        const args = {
+          course: intent.course,
+          title: intent.title,
+          date: intent.date,
+          time: intent.timeFormatted || "",
+        };
 
-    messages.push({ role: "assistant", content: typeof assistantMessage.content === "string" ? assistantMessage.content : "", tool_calls: assistantMessage.tool_calls });
+        const result = (await runner.executeTool(toolName, args, user, today)) as {
+          status: "created" | "duplicate";
+          date: string;
+          label: string;
+          cell?: string;
+          reminderSet?: boolean;
+          reminderTime?: string;
+          existingEventsOnDate?: { text: string; status: string }[];
+          slotsUsed?: number;
+          slotsFree?: number;
+        };
 
-    // Every requested tool call is validated and executed here — this is the only place planner
-    // mutations happen, and it is never influenced by anything the model claims about the user.
-    for (const call of toolCalls) {
-      const name = call.function.name;
-      let args = call.function.arguments;
-      if (typeof args === "string") {
-        try { args = JSON.parse(args); } catch { args = {}; }
+        log.push({ name: toolName, args, ok: true, result });
+
+        const isToday = intent.date === today;
+        const isTomorrow = intent.date === addDays(today, 1);
+        const dateDesc = isToday ? `today (${intent.date})` : isTomorrow ? `tomorrow (${intent.date})` : formatDateReadable(intent.date);
+
+        if (result.status === "created") {
+          let msg = `Added **${result.label}** to your planner for ${dateDesc}${result.cell ? ` (Cell ${result.cell})` : ""}.`;
+          if (result.reminderSet && result.reminderTime) {
+            msg += `\n⏰ In 5 minutes before the event (${result.reminderTime}), you will receive a Telegram reminder.`;
+          }
+          if (result.existingEventsOnDate && result.existingEventsOnDate.length > 0) {
+            msg += `\n📅 You now have ${result.slotsUsed} event(s) on this date (${result.slotsFree} slots left).`;
+          }
+          reply = msg;
+        } else if (result.status === "duplicate") {
+          reply = `ℹ️ **${result.label}** is already on your planner for ${dateDesc}.`;
+        }
+        break;
       }
-      let toolResult: unknown;
-      let ok = true;
-      try {
-        toolResult = await executeTool(name, args, user, today);
-      } catch (error) {
-        ok = false;
-        toolResult = { error: error instanceof PlannerError ? error.message : "That action could not be completed. Please try again." };
+
+      case "GET_TODAY": {
+        const toolName = "get_today_schedule";
+        const args = {};
+        const result = (await runner.executeTool(toolName, args, user, today)) as {
+          date: string;
+          items: { text: string; status: string }[];
+        };
+        log.push({ name: toolName, args, ok: true, result });
+
+        if (!result.items.length) {
+          reply = `You have nothing scheduled for today (${today}). Enjoy your day!`;
+        } else {
+          reply = `Here is your schedule for today (${today}):\n\n` +
+            result.items.map((item, idx) => `${idx + 1}. [${item.status.toUpperCase()}] ${item.text}`).join("\n");
+        }
+        break;
       }
-      log.push({ name, args: (args && typeof args === "object" ? args as Record<string, unknown> : {}), ok, result: toolResult });
-      messages.push({ role: "tool", name, content: JSON.stringify(toolResult) });
+
+      case "GET_TOMORROW": {
+        const toolName = "get_schedule";
+        const args = { from: intent.date, to: intent.date };
+        const result = (await runner.executeTool(toolName, args, user, today)) as {
+          date: string;
+          slots: { text: string; status: string }[];
+        }[];
+        log.push({ name: toolName, args, ok: true, result });
+
+        const day = result[0];
+        if (!day || !day.slots.length) {
+          reply = `You have nothing scheduled for tomorrow (${intent.date}).`;
+        } else {
+          reply = `Here is your schedule for tomorrow (${intent.date}):\n\n` +
+            day.slots.map((item, idx) => `${idx + 1}. [${item.status.toUpperCase()}] ${item.text}`).join("\n");
+        }
+        break;
+      }
+
+      case "GET_WEEK": {
+        const toolName = "get_week_schedule";
+        const args = {};
+        const result = (await runner.executeTool(toolName, args, user, today)) as {
+          date: string;
+          slots: { text: string; status: string }[];
+        }[];
+        log.push({ name: toolName, args, ok: true, result });
+
+        const daysWithEvents = result.filter((day) => day.slots.length > 0);
+        if (!daysWithEvents.length) {
+          reply = "You have no events scheduled for the next 7 days.";
+        } else {
+          reply = `Here is your schedule for this week:\n\n` +
+            daysWithEvents
+              .map((day) => `📅 **${formatDateReadable(day.date)}**:\n` + day.slots.map((s) => `  • [${s.status.toUpperCase()}] ${s.text}`).join("\n"))
+              .join("\n\n");
+        }
+        break;
+      }
+
+      case "GET_DEADLINES": {
+        const toolName = "get_deadlines";
+        const args = {};
+        const result = (await runner.executeTool(toolName, args, user, today)) as {
+          date: string;
+          slots: { text: string; status: string }[];
+        }[];
+        log.push({ name: toolName, args, ok: true, result });
+
+        const daysWithDeadlines = result.filter((day) => day.slots.length > 0);
+        if (!daysWithDeadlines.length) {
+          reply = "You have no upcoming deadlines in the next 14 days!";
+        } else {
+          reply = `Here are your upcoming deadlines:\n\n` +
+            daysWithDeadlines
+              .map((day) => `📅 **${formatDateReadable(day.date)}**:\n` + day.slots.map((s) => `  • ${s.text}`).join("\n"))
+              .join("\n\n");
+        }
+        break;
+      }
+
+      case "GET_UNFINISHED": {
+        const toolName = "get_unfinished_events";
+        const args = {};
+        const result = (await runner.executeTool(toolName, args, user, today)) as {
+          date: string;
+          slots: { text: string; status: string }[];
+        }[];
+        log.push({ name: toolName, args, ok: true, result });
+
+        const daysWithUnfinished = result.filter((day) => day.slots.length > 0);
+        if (!daysWithUnfinished.length) {
+          reply = "You have no pending unfinished tasks from the past 30 days!";
+        } else {
+          reply = `Here are your unfinished tasks from the past 30 days:\n\n` +
+            daysWithUnfinished
+              .map((day) => `📅 **${formatDateReadable(day.date)}**:\n` + day.slots.map((s) => `  • ${s.text}`).join("\n"))
+              .join("\n\n");
+        }
+        break;
+      }
+
+      case "FIND_EVENT": {
+        const toolName = "find_event";
+        const args = { query: intent.query };
+        const result = (await runner.executeTool(toolName, args, user, today)) as {
+          totalMatches: number;
+          matches: { date: string; cell: string; text: string; status: string }[];
+        };
+        log.push({ name: toolName, args, ok: true, result });
+
+        if (result.totalMatches === 0) {
+          reply = `No events found matching "${intent.query}".`;
+        } else {
+          reply = `Found ${result.totalMatches} event(s) matching "${intent.query}":\n\n` +
+            result.matches.map((m) => `• **${m.text}** on ${formatDateReadable(m.date)} (Cell ${m.cell}, ${m.status.toUpperCase()})`).join("\n");
+        }
+        break;
+      }
+
+      case "MARK_COMPLETE": {
+        const fromDate = addDays(today, -30);
+        const toDate = addDays(today, 60);
+        const matches = await runner.findEventsDetailed(user, intent.targetText, fromDate, toDate);
+        if (!matches.length) {
+          reply = `Could not find an event matching "${intent.targetText}" to mark complete.`;
+        } else {
+          const match = matches[0];
+          const toolName = "mark_complete";
+          const args = { cell: match.cell, sheetId: match.sheetId };
+          const result = await runner.executeTool(toolName, args, user, today);
+          log.push({ name: toolName, args, ok: true, result });
+          reply = `Marked **${match.text}** on ${formatDateReadable(match.date)} as completed! 🎉`;
+        }
+        break;
+      }
+
+      case "MARK_INCOMPLETE": {
+        const fromDate = addDays(today, -30);
+        const toDate = addDays(today, 60);
+        const matches = await runner.findEventsDetailed(user, intent.targetText, fromDate, toDate);
+        if (!matches.length) {
+          reply = `Could not find an event matching "${intent.targetText}" to mark pending.`;
+        } else {
+          const match = matches[0];
+          const toolName = "mark_incomplete";
+          const args = { cell: match.cell, sheetId: match.sheetId };
+          const result = await runner.executeTool(toolName, args, user, today);
+          log.push({ name: toolName, args, ok: true, result });
+          reply = `Marked **${match.text}** on ${formatDateReadable(match.date)} as pending.`;
+        }
+        break;
+      }
+
+      case "DELETE_EVENT": {
+        const fromDate = addDays(today, -30);
+        const toDate = addDays(today, 60);
+        const matches = await runner.findEventsDetailed(user, intent.targetText, fromDate, toDate);
+        if (!matches.length) {
+          reply = `Could not find an event matching "${intent.targetText}" to delete.`;
+        } else {
+          const match = matches[0];
+          const toolName = "delete_event";
+          const args = { cell: match.cell, sheetId: match.sheetId };
+          const result = await runner.executeTool(toolName, args, user, today);
+          log.push({ name: toolName, args, ok: true, result });
+          reply = `Deleted **${match.text}** from your planner (${formatDateReadable(match.date)}, Cell ${match.cell}).`;
+        }
+        break;
+      }
+
+      case "MOVE_EVENT": {
+        const fromDate = addDays(today, -30);
+        const toDate = addDays(today, 60);
+        const matches = await runner.findEventsDetailed(user, intent.targetText, fromDate, toDate);
+        if (!matches.length) {
+          reply = `Could not find an event matching "${intent.targetText}" to move.`;
+        } else {
+          const match = matches[0];
+          const toolName = "move_event";
+          const args = {
+            cell: match.cell,
+            sourceSheetId: match.sheetId,
+            sourceRowIndex: match.rowIndex,
+            sourceDate: match.date,
+            text: match.text,
+            targetDate: intent.targetDate,
+          };
+          const result = await runner.executeTool(toolName, args, user, today);
+          log.push({ name: toolName, args, ok: true, result });
+          reply = `Moved **${match.text}** to ${formatDateReadable(intent.targetDate)}.`;
+        }
+        break;
+      }
+
+      case "HELP":
+      default: {
+        reply = "Hi! I'm Excela, your smart planner assistant.\n\n" +
+          "You can chat with me naturally to manage your planner:\n" +
+          "• **Add timed tasks**: `I have self advising at 7pm tomorrow`\n" +
+          "• **Add academic tasks**: `CSE340 Quiz 2 on Friday at 3pm`\n" +
+          "• **Add untimed tasks**: `Gym Oct 2` or `Assignment due tomorrow`\n" +
+          "• **Check schedule**: `What do I have today?` or `What's on this week?`\n" +
+          "• **Update status**: `Mark Quiz 2 complete` or `Delete Gym`\n\n" +
+          "⏰ Any event with an explicit clock time automatically gets a 5-minute pre-event reminder!";
+        break;
+      }
+    }
+  } catch (error) {
+    if (error instanceof PlannerError) {
+      reply = `⚠️ ${error.message}`;
+    } else {
+      console.error("Agent execution error:", error);
+      reply = "That action could not be completed right now. Please check your connection and try again.";
     }
   }
 
-  throw new AgentError("This request needed too many steps to complete safely. Try breaking it into smaller requests.");
+  const updatedHistory: AgentMessage[] = [
+    ...history,
+    { role: "user", content: userMessage },
+    { role: "assistant", content: reply },
+  ];
+
+  return { reply, log, history: updatedHistory };
 }

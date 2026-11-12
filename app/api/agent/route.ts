@@ -31,8 +31,8 @@ export async function POST(request: Request) {
     userDoc = current.user;
     apiKey = userDoc.ollamaApiKey ? decrypt(userDoc.ollamaApiKey) : null;
     apiKey = apiKey ? normalizeOllamaKey(apiKey) : null;
-    if (!apiKey || !userDoc.sheetId) {
-      return Response.json({ error: "Complete setup with a planner and your Ollama API key first.", code: "setup_required" }, { status: 409 });
+    if (!userDoc.sheetId) {
+      return Response.json({ error: "Connect your Google Sheets planner in Setup first.", code: "no_sheet" }, { status: 409 });
     }
   } catch {
     return Response.json({ error: "Could not reach the database. Please try again." }, { status: 503 });

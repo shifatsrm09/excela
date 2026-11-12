@@ -374,16 +374,9 @@ export async function POST(request: Request) {
       return Response.json({ ok: true });
     }
 
-    // Check Ollama API key
+    // Optional Ollama API key
     const rawApiKey = user.ollamaApiKey ? decrypt(user.ollamaApiKey) : null;
     const apiKey = rawApiKey ? normalizeOllamaKey(rawApiKey) : null;
-    if (!apiKey) {
-      await sendTelegramReply(
-        chatId,
-        "⚠️ Please configure your Ollama API key in Excela web setup before chatting with the planner.",
-      );
-      return Response.json({ ok: true });
-    }
 
     // Check Google Sheets planner
     if (!user.sheetId) {
